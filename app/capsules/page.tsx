@@ -7,9 +7,10 @@ import { BottomNav } from "@/components/bottom-nav";
 import { CapsuleCard } from "@/components/capsule-card";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
-import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, Coins } from "lucide-react";
+import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, Coins, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ethers, BrowserProvider, Contract, formatEther } from "ethers";
+import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
+import confetti from "canvas-confetti"; // Optional
 
 // --- Configuration ---
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
@@ -51,11 +52,47 @@ const parseGiftMessage = (rawMsg: string) => {
   }
 };
 
-// এই ফাংশনটি অ্যাড্রেস ছোট করবে যাতে UI ভেঙে না যায়
 const shortenAddress = (addr: string) => {
   if (!addr || addr.length < 10) return addr;
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
+
+// --- Success Modal Component ---
+function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onClose: () => void; amount: string; token: string }) {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.9 }}
+        className="relative w-full max-w-sm overflow-hidden rounded-3xl border border-primary/20 bg-card p-6 text-center shadow-2xl"
+      >
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary via-purple-500 to-pink-500" />
+        
+        <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 ring-4 ring-primary/20">
+          <PartyPopper className="h-10 w-10 text-primary animate-bounce" />
+        </div>
+        
+        <h2 className="mb-2 text-2xl font-bold text-foreground">Congratulations!</h2>
+        <p className="mb-6 text-muted-foreground">
+          You have successfully claimed your gift.
+        </p>
+        
+        <div className="mb-6 rounded-2xl bg-secondary/50 p-4 border border-border">
+          <p className="text-sm text-muted-foreground uppercase tracking-wide">Received Amount</p>
+          <p className="text-3xl font-bold text-primary mt-1">
+            {amount} <span className="text-lg text-foreground">{token}</span>
+          </p>
+        </div>
+
+        <Button onClick={onClose} className="w-full rounded-xl h-12 text-base font-semibold shadow-lg shadow-primary/25">
+          Awesome, Thanks!
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
 
 export default function CapsulesPage() {
   const [isConnected, setIsConnected] = useState(false);
@@ -68,7 +105,7 @@ export default function CapsulesPage() {
   const [avatar, setAvatar] = useState<string | null>(null);
   const [ethBalance, setEthBalance] = useState("0.00");
 
-  const [activeTab, setActiveTab] = useState<TabType>("received"); // Default to received per screenshot
+  const [activeTab, setActiveTab] = useState<TabType>("received");
   const [filter, setFilter] = useState<FilterType>("all");
   const [copied, setCopied] = useState(false);
   
@@ -78,6 +115,9 @@ export default function CapsulesPage() {
   
   const [selectedCapsule, setSelectedCapsule] = useState<CapsuleData | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
+
+  // Success Modal State
+  const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
 
   // --- Wallet Logic ---
   const handleDisconnect = useCallback(() => {
@@ -172,19 +212,24 @@ export default function CapsulesPage() {
           if (!isSender && !isRecipient) continue;
 
           const { content, isAnonymous } = parseGiftMessage(gift.message);
+          
+          // Fix: USDC Decimals
           const isEth = gift.tokenAddress === ethers.ZeroAddress;
           const tokenSymbol = isEth ? "ETH" : "USDC";
-          const formattedAmount = formatEther(gift.amount);
-          const unlockDate = new Date(Number(gift.unlockTime) * 1000);
+          const decimals = isEth ? 18 : 6; 
+          const formattedAmount = formatUnits(gift.amount, decimals);
           
-          const capsuleData: CapsuleData = {
+          const unlockDate = new Date(Number(gift.unlockTime) * 1000);
+          const isUnlocked = new Date() >= unlockDate;
+          
+          const baseCapsuleData: CapsuleData = {
             id: gift.id.toString(),
             sender: gSender,
             recipient: gRecipient,
             amount: formattedAmount,
             token: tokenSymbol as "ETH" | "USDC",
             unlockDate: unlockDate,
-            isUnlocked: new Date() >= unlockDate,
+            isUnlocked: isUnlocked,
             isWithdrawn: gift.isWithdrawn,
             isAnonymous: isAnonymous,
             message: content,
@@ -192,8 +237,21 @@ export default function CapsulesPage() {
             nftTokenId: gift.id.toString(),
           };
 
-          if (isSender) sent.push(capsuleData);
-          if (isRecipient) received.push(capsuleData);
+          // Logic for Sender Tab (Sender sees original message)
+          if (isSender) {
+            sent.push(baseCapsuleData);
+          }
+
+          // Logic for Received Tab (Hide message if locked)
+          if (isRecipient) {
+            const receivedData = { ...baseCapsuleData };
+            // --- FIX 3: Hide message if not unlocked ---
+            if (!isUnlocked) {
+              receivedData.message = "🔒 Message is hidden until unlocked";
+            }
+            received.push(receivedData);
+          }
+          
         } catch (err) { console.error(err); }
       }
       setMySentCapsules(sent);
@@ -206,7 +264,7 @@ export default function CapsulesPage() {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
 
-  // --- Claim ---
+  // --- Claim Logic ---
   const handleClaim = async () => {
     if (!selectedCapsule || !signer) return;
     setIsClaiming(true);
@@ -214,9 +272,25 @@ export default function CapsulesPage() {
       const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       const tx = await contract.withdrawGift(selectedCapsule.id);
       await tx.wait();
-      setSelectedCapsule(null);
-      fetchCapsules();
-    } catch (error: any) { alert("Claim failed: " + (error.reason || error.message)); } 
+
+      const claimedAmount = selectedCapsule.amount;
+      const claimedToken = selectedCapsule.token;
+      
+      setSelectedCapsule(null); 
+      
+      // Trigger Success Popup
+      setSuccessModalData({ amount: claimedAmount, token: claimedToken });
+      
+      try {
+        if (typeof confetti === 'function') {
+          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        }
+      } catch (e) { }
+
+      fetchCapsules(); 
+    } catch (error: any) { 
+      alert("Claim failed: " + (error.reason || error.message)); 
+    } 
     finally { setIsClaiming(false); }
   };
 
@@ -230,7 +304,7 @@ export default function CapsulesPage() {
   const receivedCapsules = myReceivedCapsules.filter(c => filter === "all" || c.token === filter);
 
   return (
-    <div className="min-h-screen bg-background pb-20">
+    <div className="min-h-screen bg-background pb-20 relative">
       <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={handleDisconnect} />
       <main className="mx-auto max-w-[480px] px-4 py-6">
         {!isConnected ? (
@@ -310,7 +384,6 @@ export default function CapsulesPage() {
                     <CapsuleCard 
                       key={c.id} 
                       type="received" 
-                      // FIX: Using shortenAddress here prevents overflow
                       sender={c.isAnonymous ? "Secret Sender" : shortenAddress(c.sender)} 
                       amount={c.amount} 
                       token={c.token} 
@@ -330,6 +403,8 @@ export default function CapsulesPage() {
         )}
       </main>
       <BottomNav />
+      
+      {/* Detail Modal */}
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
@@ -340,11 +415,24 @@ export default function CapsulesPage() {
           isClaiming={isClaiming} 
         />
       )}
+
+      {/* Success Modal Popup */}
+      <AnimatePresence>
+        {successModalData && (
+          <SuccessModal 
+            isOpen={!!successModalData} 
+            onClose={() => setSuccessModalData(null)} 
+            amount={successModalData.amount} 
+            token={successModalData.token} 
+          />
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }
 
-// Small subcomponents (TabButton, FilterChip, EmptyState, NotConnectedState) same as before...
+// Subcomponents
 function NotConnectedState({ onConnect }: { onConnect: () => void }) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
