@@ -1,229 +1,440 @@
-// app/page.tsx
+// app/capsules/page.tsx
 
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import React, { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
-import { Lock, Diamond, Shield, ExternalLink, Gift, FileText, Github, ArrowRight } from "lucide-react";
-import { createPublicClient, http, formatEther } from "viem";
-import { baseSepolia } from "viem/chains";
+import { CapsuleCard } from "@/components/capsule-card";
+import { GiftModal } from "@/components/gift-modal";
+import { Button } from "@/components/ui/button";
+import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, Coins, PartyPopper } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 
-// Contract Configuration
+// ... (Constants and logic remain exactly the same) ...
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
+const BASE_SEPOLIA_ID = "0x14a34"; 
+const STORAGE_KEY = "yupp_wallet_connected";
 
-// Minimal ABI
-const CAPSULE_ABI = [
-  {
-    inputs: [],
-    name: "getAllCapsules",
-    outputs: [
-      {
-        components: [
-          { name: "id", type: "string" },
-          { name: "sender", type: "address" },
-          { name: "recipient", type: "address" },
-          { name: "unlockDate", type: "uint256" },
-          { name: "amount", type: "uint256" },
-          { name: "isUnlocked", type: "bool" },
-          { name: "isCanceled", type: "bool" },
-        ],
-        internalType: "struct TimeCapsule.CapsuleData[]",
-        name: "",
-        type: "tuple[]",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
+const CONTRACT_ABI = [
+  "function giftCounter() view returns (uint256)",
+  "function getGiftDetails(uint256 _giftId) view returns ((uint256 id, address sender, address recipient, address tokenAddress, uint256 amount, uint256 unlockTime, bool isWithdrawn, bool isCancelled, string message))",
+  "function withdrawGift(uint256 _giftId)"
+];
 
-export default function HomePage() {
-  const [stats, setStats] = useState({
-    giftsSent: "...",
-    valueLocked: "...",
-    activeUsers: "...",
-  });
+// ... (Helpers remain same) ...
+const parseGiftMessage = (rawMsg: string) => {
+    try {
+      const decoded = atob(rawMsg);
+      const json = JSON.parse(decoded);
+      return { content: json.content || "", isAnonymous: !!json.isAnonymous };
+    } catch (e) {
+      return { content: rawMsg, isAnonymous: false };
+    }
+  };
+  
+const shortenAddress = (addr: string) => {
+  if (!addr || addr.length < 10) return addr;
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+};
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const client = createPublicClient({
-          chain: baseSepolia,
-          transport: http(),
-        });
+// ... (SuccessModal remains similar but with cleaner style) ...
+function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onClose: () => void; amount: string; token: string }) {
+    if (!isOpen) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          className="relative w-full max-w-sm overflow-hidden rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card"
+        >
+          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
+            <PartyPopper className="h-10 w-10 text-primary animate-bounce" />
+          </div>
+          
+          <h2 className="mb-2 text-2xl font-black text-foreground">Unlocked!</h2>
+          <p className="mb-6 font-medium text-muted-foreground">
+            You just claimed your gift.
+          </p>
+          
+          <div className="mb-8 flex flex-col items-center justify-center rounded-2xl bg-secondary py-6">
+            <span className="text-4xl font-black text-primary">{amount}</span>
+            <span className="text-sm font-bold text-muted-foreground">{token}</span>
+          </div>
+  
+          <Button onClick={onClose} className="h-14 w-full rounded-full text-lg font-bold">
+            Close
+          </Button>
+        </motion.div>
+      </div>
+    );
+  }
 
-        const data = (await client.readContract({
-          address: CONTRACT_ADDRESS,
-          abi: CAPSULE_ABI,
-          functionName: "getAllCapsules",
-        })) as any[];
+export default function CapsulesPage() {
+    // ... (All logic states remain exactly the same) ...
+  const [isConnected, setIsConnected] = useState(false);
+  const [address, setAddress] = useState("");
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [signer, setSigner] = useState<any>(null);
+  const [basename, setBasename] = useState<string | null>(null);
+  const [avatar, setAvatar] = useState<string | null>(null);
+  const [ethBalance, setEthBalance] = useState("0.00");
+  const [activeTab, setActiveTab] = useState<"sent" | "received">("received");
+  const [filter, setFilter] = useState<"all" | "ETH" | "USDC">("all");
+  const [copied, setCopied] = useState(false);
+  const [mySentCapsules, setMySentCapsules] = useState<any[]>([]);
+  const [myReceivedCapsules, setMyReceivedCapsules] = useState<any[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [selectedCapsule, setSelectedCapsule] = useState<any | null>(null);
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
 
-        if (data) {
-          const totalGifts = data.length;
-          const totalValueWei = data.reduce(
-            (acc, curr) => acc + BigInt(curr.amount),
-            BigInt(0)
-          );
-          const totalValueEth = formatEther(totalValueWei);
-          const formattedValue = parseFloat(totalValueEth).toFixed(4);
-          const uniqueUsers = new Set();
-          data.forEach((capsule) => {
-            uniqueUsers.add(capsule.sender);
-            uniqueUsers.add(capsule.recipient);
-          });
-
-          setStats({
-            giftsSent: totalGifts.toString(),
-            valueLocked: `${formattedValue} ETH`,
-            activeUsers: uniqueUsers.size.toString(),
-          });
-        }
-      } catch (error) {
-        console.error("Error fetching stats:", error);
-      }
-    };
-
-    fetchStats();
+  // ... (All effects and handlers logic remain same) ...
+  const handleDisconnect = useCallback(() => {
+    setIsConnected(false);
+    setAddress("");
+    setProvider(null);
+    setSigner(null);
+    setBasename(null);
+    setAvatar(null);
+    setEthBalance("0.00");
+    setMySentCapsules([]);
+    setMyReceivedCapsules([]);
+    localStorage.removeItem(STORAGE_KEY);
   }, []);
 
+  const handleConnect = useCallback(async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+      const _provider = new BrowserProvider(window.ethereum);
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (!accounts[0]) return;
+
+      const _signer = await _provider.getSigner();
+      const network = await _provider.getNetwork();
+      if (network.chainId !== 84532n) {
+        try {
+          await window.ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: BASE_SEPOLIA_ID }],
+          });
+        } catch (e) { console.error(e); }
+      }
+
+      setProvider(_provider);
+      setSigner(_signer);
+      setAddress(accounts[0]);
+      setIsConnected(true);
+      localStorage.setItem(STORAGE_KEY, "true");
+
+      const bal = await _provider.getBalance(accounts[0]);
+      setEthBalance(Number(formatEther(bal)).toFixed(4));
+
+      try {
+        const name = await _provider.lookupAddress(accounts[0]);
+        if (name) {
+          setBasename(name);
+          const avt = await _provider.getAvatar(name);
+          setAvatar(avt);
+        }
+      } catch (e) {}
+
+    } catch (error) {
+      console.error("Connection Failed", error);
+      handleDisconnect();
+    }
+  }, [handleDisconnect]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    const checkPersisted = async () => {
+      if (localStorage.getItem(STORAGE_KEY) === "true") {
+        const _p = new BrowserProvider(window.ethereum);
+        const accs = await _p.send("eth_accounts", []);
+        if (accs.length > 0) handleConnect();
+      }
+    };
+    checkPersisted();
+    const handleAccChange = (accs: string[]) => accs.length > 0 ? handleConnect() : handleDisconnect();
+    window.ethereum.on("accountsChanged", handleAccChange);
+    return () => { if(window.ethereum) window.ethereum.removeListener("accountsChanged", handleAccChange); };
+  }, [handleConnect, handleDisconnect]);
+
+  const fetchCapsules = useCallback(async () => {
+    if (!provider || !address) return;
+    setIsLoadingData(true);
+    try {
+      const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+      const counter = await contract.giftCounter();
+      const totalGifts = Number(counter);
+      const sent: any[] = [];
+      const received: any[] = [];
+
+      for (let i = totalGifts; i >= 1; i--) {
+        try {
+          const gift = await contract.getGiftDetails(i);
+          const gSender = gift.sender;
+          const gRecipient = gift.recipient;
+          const isSender = gSender.toLowerCase() === address.toLowerCase();
+          const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
+
+          if (!isSender && !isRecipient) continue;
+
+          const { content, isAnonymous } = parseGiftMessage(gift.message);
+          
+          const isEth = gift.tokenAddress === ethers.ZeroAddress;
+          const tokenSymbol = isEth ? "ETH" : "USDC";
+          const decimals = isEth ? 18 : 6; 
+          const formattedAmount = formatUnits(gift.amount, decimals);
+          
+          const unlockDate = new Date(Number(gift.unlockTime) * 1000);
+          const isUnlocked = new Date() >= unlockDate;
+          
+          const baseCapsuleData = {
+            id: gift.id.toString(),
+            sender: gSender,
+            recipient: gRecipient,
+            amount: formattedAmount,
+            token: tokenSymbol,
+            unlockDate: unlockDate,
+            isUnlocked: isUnlocked,
+            isWithdrawn: gift.isWithdrawn,
+            isAnonymous: isAnonymous,
+            message: content,
+            txHash: "",
+            nftTokenId: gift.id.toString(),
+          };
+
+          if (isSender) {
+            sent.push(baseCapsuleData);
+          }
+
+          if (isRecipient) {
+            const receivedData = { ...baseCapsuleData };
+            if (!isUnlocked) {
+              receivedData.message = "🔒 Message is hidden until unlocked";
+            }
+            received.push(receivedData);
+          }
+          
+        } catch (err) { console.error(err); }
+      }
+      setMySentCapsules(sent);
+      setMyReceivedCapsules(received);
+    } catch (error) { console.error(error); } 
+    finally { setIsLoadingData(false); }
+  }, [provider, address]);
+
+  useEffect(() => {
+    if (isConnected) fetchCapsules();
+  }, [isConnected, fetchCapsules]);
+
+  const handleClaim = async () => {
+    if (!selectedCapsule || !signer) return;
+    setIsClaiming(true);
+    try {
+      const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      const tx = await contract.withdrawGift(selectedCapsule.id);
+      await tx.wait();
+      const claimedAmount = selectedCapsule.amount;
+      const claimedToken = selectedCapsule.token;
+      setSelectedCapsule(null); 
+      setSuccessModalData({ amount: claimedAmount, token: claimedToken });
+      fetchCapsules(); 
+    } catch (error: any) { 
+      alert("Claim failed: " + (error.reason || error.message)); 
+    } 
+    finally { setIsClaiming(false); }
+  };
+
+  const handleCopyAddress = () => {
+    navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const sentCapsules = mySentCapsules.filter(c => filter === "all" || c.token === filter);
+  const receivedCapsules = myReceivedCapsules.filter(c => filter === "all" || c.token === filter);
+
+
   return (
-    <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
-      <Header />
-
+    <div className="min-h-screen bg-background pb-20 relative font-sans text-foreground">
+      <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={handleDisconnect} />
       <main className="mx-auto max-w-[480px] px-6 py-8">
-        {/* Hero Section - Base Style: Clean, Big Type */}
-        <section className="mb-12 flex flex-col items-center text-center">
-          <motion.div
-            className="mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-primary"
-            animate={{
-              scale: [1, 1.05, 1],
-            }}
-            transition={{ duration: 4, repeat: Infinity }}
-          >
-            <Gift className="h-10 w-10 text-white" />
-          </motion.div>
+        {!isConnected ? (
+          <NotConnectedState onConnect={handleConnect} />
+        ) : (
+          <>
+            {/* Wallet Card - Base Style: Clean Container */}
+            <div className="mb-8 rounded-3xl bg-secondary p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm">
+                    {avatar ? <img src={avatar} alt="Profile" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center bg-blue-100 text-primary"><User className="h-6 w-6" /></div>}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">{basename || "Base User"}</h3>
+                    <button onClick={handleCopyAddress} className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-primary transition-colors">
+                      {shortenAddress(address)}
+                      {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between rounded-2xl bg-background p-4 shadow-sm">
+                 <span className="text-sm font-bold text-muted-foreground">Balance</span>
+                 <span className="text-xl font-black text-foreground">{ethBalance} ETH</span>
+              </div>
+            </div>
 
-          <motion.h1
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-4 text-5xl font-black tracking-tighter text-foreground"
-          >
-            Gift Time <br/> <span className="text-primary">Capsule</span>
-          </motion.h1>
+            {/* Controls - Base Style: Pill Tabs */}
+            <div className="mb-6 flex rounded-full bg-secondary p-1">
+              <TabButton isActive={activeTab === "received"} onClick={() => setActiveTab("received")} label="Received" />
+              <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
+            </div>
 
-          <motion.p
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="max-w-xs text-lg font-medium text-muted-foreground"
-          >
-            Send crypto gifts that unlock in the future. Secured on Base.
-          </motion.p>
-        </section>
+            {/* Filter Chips */}
+            <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+              <FilterChip isActive={filter === "all"} onClick={() => setFilter("all")} label="All" />
+              <FilterChip isActive={filter === "ETH"} onClick={() => setFilter("ETH")} label="ETH" />
+              <FilterChip isActive={filter === "USDC"} onClick={() => setFilter("USDC")} label="USDC" />
+            </div>
 
-        {/* Real-time Stats - Base Style: Flat Cards */}
-        <section className="mb-12 grid grid-cols-3 gap-2">
-            <StatCard value={stats.giftsSent} label="Gifts" delay={0.2} />
-            <StatCard value={stats.valueLocked} label="Locked" delay={0.3} />
-            <StatCard value={stats.activeUsers} label="Users" delay={0.4} />
-        </section>
+            {/* List */}
+            <div className="flex justify-between items-center mb-4">
+               <h3 className="font-bold text-lg">{activeTab === "sent" ? "Sent Gifts" : "Inbox"}</h3>
+               <Button variant="ghost" size="icon" onClick={fetchCapsules} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
+                  <RefreshCw className={cn("h-4 w-4", isLoadingData && "animate-spin")} />
+                </Button>
+            </div>
 
-        {/* Feature Cards - Base Style: Minimal borders */}
-        <section className="mb-12 space-y-3">
-          <FeatureCard
-            icon={<Lock className="h-5 w-5" />}
-            title="Time-Locked"
-            description="Set exact unlock time."
-            delay={0.2}
-          />
-          <FeatureCard
-            icon={<Diamond className="h-5 w-5" />}
-            title="NFT Keys"
-            description="Recipient gets a unique key."
-            delay={0.3}
-          />
-          <FeatureCard
-            icon={<Shield className="h-5 w-5" />}
-            title="On-Chain"
-            description="Trustless smart contracts."
-            delay={0.4}
-          />
-        </section>
-
-        {/* Trust Section - Base Style: Clean Links */}
-        <section className="rounded-3xl bg-secondary/50 p-6">
-          <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">
-            Transparency
-          </h2>
-          <div className="space-y-4">
-             <TrustLink 
-              href="https://base-sepolia.blockscout.com/address/0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc" 
-              text="View Contract on Blockscout"
-            />
-            <TrustLink 
-              href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" 
-              text="View Source Code" 
-            />
-            <TrustLink 
-              href="https://drive.google.com/file/d/14U56v5iqSL2GM2349a1xseV0v8Z-oITo/view?usp" 
-              text="Security Audit" 
-            />
-          </div>
-        </section>
+            <AnimatePresence mode="wait">
+              {isLoadingData && sentCapsules.length === 0 && receivedCapsules.length === 0 ? (
+                 <div className="flex flex-col items-center justify-center py-20 text-muted-foreground"><Loader2 className="h-8 w-8 animate-spin mb-2" /><p>Loading on-chain data...</p></div>
+              ) : activeTab === "sent" ? (
+                <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                  {sentCapsules.length > 0 ? sentCapsules.map((c) => (
+                    <CapsuleCard 
+                      key={c.id} 
+                      type="sent" 
+                      recipient={shortenAddress(c.recipient)} 
+                      amount={c.amount} 
+                      token={c.token} 
+                      unlockDate={c.unlockDate} 
+                      isUnlocked={c.isUnlocked} 
+                      message={c.message} 
+                      txHash={c.txHash} 
+                      isWithdrawn={c.isWithdrawn} 
+                    />
+                  )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
+                </motion.div>
+              ) : (
+                <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                  {receivedCapsules.length > 0 ? receivedCapsules.map((c) => (
+                    <CapsuleCard 
+                      key={c.id} 
+                      type="received" 
+                      sender={c.isAnonymous ? "Secret Sender" : shortenAddress(c.sender)} 
+                      amount={c.amount} 
+                      token={c.token} 
+                      unlockDate={c.unlockDate} 
+                      isUnlocked={c.isUnlocked} 
+                      isWithdrawn={c.isWithdrawn} 
+                      message={c.message} 
+                      txHash={c.txHash} 
+                      onClaim={(c.isUnlocked && !c.isWithdrawn) ? () => setSelectedCapsule(c) : undefined} 
+                      onClick={() => setSelectedCapsule(c)} 
+                    />
+                  )) : <EmptyState icon={<Inbox />} title="Inbox Empty" description="Share your address to receive gifts." />}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </>
+        )}
       </main>
-
       <BottomNav />
+      
+      {selectedCapsule && (
+        <GiftModal 
+          isOpen={!!selectedCapsule} 
+          onClose={() => !isClaiming && setSelectedCapsule(null)} 
+          type="detail" 
+          gift={{ ...selectedCapsule, sender: selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || "") }} 
+          onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received') ? handleClaim : undefined} 
+          isClaiming={isClaiming} 
+        />
+      )}
+
+      <AnimatePresence>
+        {successModalData && (
+          <SuccessModal 
+            isOpen={!!successModalData} 
+            onClose={() => setSuccessModalData(null)} 
+            amount={successModalData.amount} 
+            token={successModalData.token} 
+          />
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }
 
-// --- Sub Components ---
-
-function FeatureCard({ icon, title, description, delay }: any) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay }}
-      className="group flex items-center gap-4 rounded-2xl border border-transparent bg-secondary px-5 py-4 transition-all hover:border-primary/20 hover:bg-white dark:hover:bg-card"
-    >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary group-hover:bg-primary group-hover:text-white transition-colors">
-        {icon}
+// Subcomponents - Refined for Base Look
+function NotConnectedState({ onConnect }: { onConnect: () => void }) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
+            <Wallet className="h-10 w-10 text-primary" />
+        </div>
+        <h2 className="text-2xl font-black mb-2">Connect Wallet</h2>
+        <p className="text-muted-foreground mb-8 max-w-[200px]">Connect to Base Sepolia to view your gifts.</p>
+        <Button onClick={onConnect} className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none">Connect</Button>
       </div>
-      <div>
-        <h3 className="font-bold text-foreground">{title}</h3>
-        <p className="text-sm font-medium text-muted-foreground">{description}</p>
-      </div>
-    </motion.div>
-  );
+    );
 }
 
-function TrustLink({ href, text }: { href: string; text: string }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-center justify-between group"
-    >
-      <span className="font-semibold text-foreground group-hover:text-primary transition-colors">{text}</span>
-      <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:translate-x-1 transition-transform" />
-    </a>
-  );
+function TabButton({ isActive, onClick, label }: any) {
+    return (
+        <button 
+            onClick={onClick} 
+            className={cn(
+                "flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200", 
+                isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground"
+            )}
+        >
+            {label}
+        </button>
+    );
 }
 
-function StatCard({ value, label, delay }: { value: string; label: string; delay: number }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ delay }}
-      className="flex flex-col items-center justify-center rounded-2xl bg-secondary p-4 text-center"
-    >
-      <p className="text-lg font-black text-foreground break-all">{value}</p>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
-    </motion.div>
-  );
+// --- UPDATED FILTER CHIP COMPONENT ---
+function FilterChip({ isActive, onClick, label }: any) {
+    return (
+        <button 
+            onClick={onClick} 
+            className={cn(
+                "rounded-full px-4 py-2 text-xs font-bold transition-colors border", 
+                isActive 
+                  ? "bg-black border-black text-white" // Active: Black BG, White Text
+                  : "bg-white border-gray-200 text-black hover:bg-gray-100" // Inactive: White BG, Black Text
+            )}
+        >
+            {label}
+        </button>
+    );
+}
+
+function EmptyState({ icon, title, description }: any) {
+    return (
+        <div className="flex flex-col items-center justify-center py-16 rounded-3xl border border-dashed border-border bg-secondary/30">
+            <div className="mb-4 text-muted-foreground/50 text-4xl">{icon}</div>
+            <h4 className="font-bold text-foreground">{title}</h4>
+            <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+    );
 }
