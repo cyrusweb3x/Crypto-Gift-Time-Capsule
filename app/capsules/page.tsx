@@ -9,12 +9,11 @@ import { BottomNav } from "@/components/bottom-nav";
 import { CapsuleCard } from "@/components/capsule-card";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
-import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, Coins, PartyPopper } from "lucide-react";
+import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 
-// ... (Constants and logic remain exactly the same) ...
-// Keeping your imports and logic intact, focusing on UI JSX below
+// --- Configuration ---
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const STORAGE_KEY = "yupp_wallet_connected";
@@ -25,75 +24,82 @@ const CONTRACT_ABI = [
   "function withdrawGift(uint256 _giftId)"
 ];
 
-// ... (Helpers remain same) ...
+// --- Helpers ---
 const parseGiftMessage = (rawMsg: string) => {
-    try {
-      const decoded = atob(rawMsg);
-      const json = JSON.parse(decoded);
-      return { content: json.content || "", isAnonymous: !!json.isAnonymous };
-    } catch (e) {
-      return { content: rawMsg, isAnonymous: false };
-    }
-  };
-  
+  try {
+    const decoded = atob(rawMsg);
+    const json = JSON.parse(decoded);
+    return { content: json.content || "", isAnonymous: !!json.isAnonymous };
+  } catch (e) {
+    return { content: rawMsg, isAnonymous: false };
+  }
+};
+
 const shortenAddress = (addr: string) => {
   if (!addr || addr.length < 10) return addr;
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
 
-// ... (SuccessModal remains similar but with cleaner style) ...
+// --- Success Modal Component ---
 function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onClose: () => void; amount: string; token: string }) {
-    if (!isOpen) return null;
-    return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className="relative w-full max-w-sm overflow-hidden rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card"
-        >
-          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
-            <PartyPopper className="h-10 w-10 text-primary animate-bounce" />
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="relative w-full max-w-sm overflow-hidden rounded-[2rem] bg-white p-8 text-center shadow-2xl"
+      >
+        <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-[#0052FF]/10">
+          <PartyPopper className="h-10 w-10 text-[#0052FF] animate-bounce" />
+        </div>
+        
+        <h2 className="mb-2 text-3xl font-black tracking-tight text-black">Unlocked!</h2>
+        <p className="mb-8 font-medium text-gray-500">
+          You have successfully claimed your gift.
+        </p>
+        
+        <div className="mb-8 rounded-2xl bg-[#F0F2F5] p-6">
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-1">Received</p>
+          <div className="flex items-baseline justify-center gap-2">
+            <span className="text-4xl font-black text-black">{amount}</span>
+            <span className="text-lg font-bold text-gray-500">{token}</span>
           </div>
-          
-          <h2 className="mb-2 text-2xl font-black text-foreground">Unlocked!</h2>
-          <p className="mb-6 font-medium text-muted-foreground">
-            You just claimed your gift.
-          </p>
-          
-          <div className="mb-8 flex flex-col items-center justify-center rounded-2xl bg-secondary py-6">
-            <span className="text-4xl font-black text-primary">{amount}</span>
-            <span className="text-sm font-bold text-muted-foreground">{token}</span>
-          </div>
-  
-          <Button onClick={onClose} className="h-14 w-full rounded-full text-lg font-bold">
-            Close
-          </Button>
-        </motion.div>
-      </div>
-    );
-  }
+        </div>
+
+        <Button onClick={onClose} className="h-14 w-full rounded-full bg-[#0052FF] text-lg font-bold text-white hover:bg-[#004ad9]">
+          Awesome
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
 
 export default function CapsulesPage() {
-    // ... (All logic states remain exactly the same) ...
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<any>(null);
+  
+  // Profile
   const [basename, setBasename] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
   const [ethBalance, setEthBalance] = useState("0.00");
+
   const [activeTab, setActiveTab] = useState<"sent" | "received">("received");
   const [filter, setFilter] = useState<"all" | "ETH" | "USDC">("all");
   const [copied, setCopied] = useState(false);
+  
   const [mySentCapsules, setMySentCapsules] = useState<any[]>([]);
   const [myReceivedCapsules, setMyReceivedCapsules] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
+  
   const [selectedCapsule, setSelectedCapsule] = useState<any | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
 
-  // ... (All effects and handlers logic remain same) ...
+  // --- Wallet Logic ---
   const handleDisconnect = useCallback(() => {
     setIsConnected(false);
     setAddress("");
@@ -164,6 +170,7 @@ export default function CapsulesPage() {
     return () => { if(window.ethereum) window.ethereum.removeListener("accountsChanged", handleAccChange); };
   }, [handleConnect, handleDisconnect]);
 
+  // --- Fetch Data ---
   const fetchCapsules = useCallback(async () => {
     if (!provider || !address) return;
     setIsLoadingData(true);
@@ -199,7 +206,7 @@ export default function CapsulesPage() {
             sender: gSender,
             recipient: gRecipient,
             amount: formattedAmount,
-            token: tokenSymbol,
+            token: tokenSymbol as "ETH" | "USDC",
             unlockDate: unlockDate,
             isUnlocked: isUnlocked,
             isWithdrawn: gift.isWithdrawn,
@@ -233,6 +240,7 @@ export default function CapsulesPage() {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
 
+  // --- Claim Logic ---
   const handleClaim = async () => {
     if (!selectedCapsule || !signer) return;
     setIsClaiming(true);
@@ -240,10 +248,13 @@ export default function CapsulesPage() {
       const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       const tx = await contract.withdrawGift(selectedCapsule.id);
       await tx.wait();
+
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
+      
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
+      
       fetchCapsules(); 
     } catch (error: any) { 
       alert("Claim failed: " + (error.reason || error.message)); 
@@ -260,64 +271,67 @@ export default function CapsulesPage() {
   const sentCapsules = mySentCapsules.filter(c => filter === "all" || c.token === filter);
   const receivedCapsules = myReceivedCapsules.filter(c => filter === "all" || c.token === filter);
 
-
   return (
-    <div className="min-h-screen bg-background pb-20 relative font-sans text-foreground">
+    <div className="min-h-screen bg-white pb-24 font-sans text-black">
       <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={handleDisconnect} />
-      <main className="mx-auto max-w-[480px] px-6 py-8">
+      
+      <main className="mx-auto max-w-[480px] px-6 py-6">
         {!isConnected ? (
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
-            {/* Wallet Card - Base Style: Clean Container */}
-            <div className="mb-8 rounded-3xl bg-secondary p-6">
+            {/* Wallet Section */}
+            <div className="mb-8 rounded-[2rem] bg-[#F0F2F5] p-6 transition-all">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-4">
-                  <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm">
-                    {avatar ? <img src={avatar} alt="Profile" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center bg-blue-100 text-primary"><User className="h-6 w-6" /></div>}
+                  <div className="h-14 w-14 overflow-hidden rounded-full bg-white shadow-sm ring-2 ring-white">
+                    {avatar ? <img src={avatar} alt="Profile" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[#0052FF]"><User className="h-7 w-7" /></div>}
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">{basename || "Base User"}</h3>
-                    <button onClick={handleCopyAddress} className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-primary transition-colors">
+                    <h3 className="text-lg font-bold text-black">{basename || "Base User"}</h3>
+                    <button onClick={handleCopyAddress} className="flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-[#0052FF] transition-colors">
                       {shortenAddress(address)}
-                      {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+                      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
                     </button>
                   </div>
                 </div>
               </div>
               
-              <div className="flex items-center justify-between rounded-2xl bg-background p-4 shadow-sm">
-                 <span className="text-sm font-bold text-muted-foreground">Balance</span>
-                 <span className="text-xl font-black text-foreground">{ethBalance} ETH</span>
+              <div className="flex items-center justify-between rounded-3xl bg-white px-6 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.02)]">
+                <span className="text-sm font-bold text-gray-400">Total Balance</span>
+                <span className="text-xl font-black text-black">{ethBalance} ETH</span>
               </div>
             </div>
 
-            {/* Controls - Base Style: Pill Tabs */}
-            <div className="mb-6 flex rounded-full bg-secondary p-1">
+            {/* Controls */}
+            <div className="mb-6 flex rounded-full bg-[#F0F2F5] p-1.5">
               <TabButton isActive={activeTab === "received"} onClick={() => setActiveTab("received")} label="Received" />
               <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
             </div>
 
-            {/* Filter Chips */}
-            <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
-              <FilterChip isActive={filter === "all"} onClick={() => setFilter("all")} label="All" />
+            {/* Filters - Fixed Text Color Here */}
+            <div className="mb-6 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+              <FilterChip isActive={filter === "all"} onClick={() => setFilter("all")} label="All Assets" />
               <FilterChip isActive={filter === "ETH"} onClick={() => setFilter("ETH")} label="ETH" />
               <FilterChip isActive={filter === "USDC"} onClick={() => setFilter("USDC")} label="USDC" />
             </div>
 
-            {/* List */}
-            <div className="flex justify-between items-center mb-4">
-               <h3 className="font-bold text-lg">{activeTab === "sent" ? "Sent Gifts" : "Inbox"}</h3>
-               <Button variant="ghost" size="icon" onClick={fetchCapsules} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
-                  <RefreshCw className={cn("h-4 w-4", isLoadingData && "animate-spin")} />
+            {/* List Header */}
+            <div className="flex items-center justify-between mb-4 px-2">
+                <h3 className="text-xl font-black tracking-tight">{activeTab === "sent" ? "Sent Gifts" : "Inbox"}</h3>
+                <Button variant="ghost" size="icon" onClick={fetchCapsules} disabled={isLoadingData} className="h-8 w-8 rounded-full bg-[#F0F2F5] hover:bg-gray-200">
+                  <RefreshCw className={cn("h-4 w-4 text-gray-600", isLoadingData && "animate-spin")} />
                 </Button>
             </div>
 
+            {/* List Content */}
             <AnimatePresence mode="wait">
               {isLoadingData && sentCapsules.length === 0 && receivedCapsules.length === 0 ? (
-                 <div className="flex flex-col items-center justify-center py-20 text-muted-foreground"><Loader2 className="h-8 w-8 animate-spin mb-2" /><p>Loading on-chain data...</p></div>
+                 <div className="flex flex-col items-center justify-center py-24">
+                    <Loader2 className="h-8 w-8 animate-spin text-[#0052FF]" />
+                 </div>
               ) : activeTab === "sent" ? (
-                <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
                   {sentCapsules.length > 0 ? sentCapsules.map((c) => (
                     <CapsuleCard 
                       key={c.id} 
@@ -331,10 +345,10 @@ export default function CapsulesPage() {
                       txHash={c.txHash} 
                       isWithdrawn={c.isWithdrawn} 
                     />
-                  )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
+                  )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Start gifting on Base today." />}
                 </motion.div>
               ) : (
-                <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
                   {receivedCapsules.length > 0 ? receivedCapsules.map((c) => (
                     <CapsuleCard 
                       key={c.id} 
@@ -357,8 +371,10 @@ export default function CapsulesPage() {
           </>
         )}
       </main>
+      
       <BottomNav />
       
+      {/* Detail Modal */}
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
@@ -370,6 +386,7 @@ export default function CapsulesPage() {
         />
       )}
 
+      {/* Success Modal */}
       <AnimatePresence>
         {successModalData && (
           <SuccessModal 
@@ -385,16 +402,17 @@ export default function CapsulesPage() {
   );
 }
 
-// Subcomponents - Refined for Base Look
+// --- Sub Components (Fixed) ---
+
 function NotConnectedState({ onConnect }: { onConnect: () => void }) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-center">
-        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
-            <Wallet className="h-10 w-10 text-primary" />
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-[#0052FF]/5">
+            <Wallet className="h-8 w-8 text-[#0052FF]" />
         </div>
-        <h2 className="text-2xl font-black mb-2">Connect Wallet</h2>
-        <p className="text-muted-foreground mb-8 max-w-[200px]">Connect to Base Sepolia to view your gifts.</p>
-        <Button onClick={onConnect} className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none">Connect</Button>
+        <h2 className="text-2xl font-black text-black">Connect Wallet</h2>
+        <p className="mt-2 text-gray-500">Connect to see your Base gifts.</p>
+        <Button onClick={onConnect} className="mt-8 h-12 w-full max-w-[200px] rounded-full bg-[#0052FF] font-bold text-white shadow-none hover:bg-[#004ad9]">Connect</Button>
       </div>
     );
 }
@@ -405,7 +423,7 @@ function TabButton({ isActive, onClick, label }: any) {
             onClick={onClick} 
             className={cn(
                 "flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200", 
-                isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground"
+                isActive ? "bg-white text-black shadow-[0_2px_8px_rgba(0,0,0,0.08)]" : "text-gray-500 hover:text-gray-900"
             )}
         >
             {label}
@@ -413,13 +431,16 @@ function TabButton({ isActive, onClick, label }: any) {
     );
 }
 
+// FIX: এখানে text-black ব্যবহার করা হয়েছে Inactive অবস্থার জন্য
 function FilterChip({ isActive, onClick, label }: any) {
     return (
         <button 
             onClick={onClick} 
             className={cn(
                 "rounded-full px-4 py-2 text-xs font-bold transition-colors border", 
-                isActive ? "bg-black border-black text-white" : "bg-white border-border text-foreground hover:bg-secondary"
+                isActive 
+                  ? "bg-black border-black text-white" 
+                  : "bg-white border-[#E2E4E8] text-black hover:bg-[#F0F2F5]" // এখানে text-black দেওয়া হলো
             )}
         >
             {label}
@@ -429,10 +450,10 @@ function FilterChip({ isActive, onClick, label }: any) {
 
 function EmptyState({ icon, title, description }: any) {
     return (
-        <div className="flex flex-col items-center justify-center py-16 rounded-3xl border border-dashed border-border bg-secondary/30">
-            <div className="mb-4 text-muted-foreground/50 text-4xl">{icon}</div>
-            <h4 className="font-bold text-foreground">{title}</h4>
-            <p className="text-sm text-muted-foreground">{description}</p>
+        <div className="flex flex-col items-center justify-center py-16 rounded-[2rem] border-2 border-dashed border-[#E2E4E8] bg-[#FAFAFA]">
+            <div className="mb-3 text-gray-300 text-4xl">{icon}</div>
+            <p className="font-bold text-gray-900">{title}</p>
+            <p className="text-xs font-medium text-gray-400">{description}</p>
         </div>
     );
 }
