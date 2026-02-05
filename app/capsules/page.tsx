@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, Coins, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
-import confetti from "canvas-confetti"; // Optional
 
 // --- Configuration ---
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
@@ -245,7 +244,7 @@ export default function CapsulesPage() {
           // Logic for Received Tab (Hide message if locked)
           if (isRecipient) {
             const receivedData = { ...baseCapsuleData };
-            // --- FIX 3: Hide message if not unlocked ---
+            // --- Message Hidden until Unlock ---
             if (!isUnlocked) {
               receivedData.message = "🔒 Message is hidden until unlocked";
             }
@@ -281,12 +280,6 @@ export default function CapsulesPage() {
       // Trigger Success Popup
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
       
-      try {
-        if (typeof confetti === 'function') {
-          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-        }
-      } catch (e) { }
-
       fetchCapsules(); 
     } catch (error: any) { 
       alert("Claim failed: " + (error.reason || error.message)); 
