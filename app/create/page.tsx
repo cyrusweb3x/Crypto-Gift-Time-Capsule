@@ -1,3 +1,5 @@
+// app/create/page.tsx
+
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -7,7 +9,7 @@ import { ConfettiEffect } from "@/components/confetti-effect";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
 import {
-  Clipboard, Info, Loader2, Gift, AlertTriangle, User, UserX
+  Clipboard, Info, Loader2, Gift, AlertTriangle, User, UserX, Sparkles
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
@@ -17,7 +19,11 @@ const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const CHAIN_ID_HEX = "0x14a34"; // Base Sepolia
 const CHAIN_ID_DECIMAL = 84532;
-const STORAGE_KEY = "yupp_wallet_connected"; // Key to track user intent
+const STORAGE_KEY = "yupp_wallet_connected";
+
+// Suggestion Presets
+const ETH_PRESETS = ["0.001", "0.01", "0.05", "0.1", "0.5"];
+const USDC_PRESETS = ["5", "10", "20", "50", "100"];
 
 // --- ABIs ---
 const ERC20_ABI = [
@@ -40,7 +46,6 @@ function useEvmWallet() {
   const [chainId, setChainId] = useState<number | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
 
-  // 1. Connect Function (Manually triggered by user)
   const connect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     setIsConnecting(true);
@@ -55,7 +60,6 @@ function useEvmWallet() {
         setSigner(_signer);
         setAddress(accounts[0]);
         setChainId(Number(network.chainId));
-        // Mark as intentionally connected
         localStorage.setItem(STORAGE_KEY, "true");
       }
     } catch (e) {
@@ -65,17 +69,14 @@ function useEvmWallet() {
     }
   }, []);
 
-  // 2. Disconnect Function
   const disconnect = useCallback(() => {
     setAddress("");
     setSigner(null);
     setProvider(null);
     setChainId(null);
-    // Remove the flag so it doesn't auto-connect next time
     localStorage.removeItem(STORAGE_KEY);
   }, []);
 
-  // 3. Ensure Chain Function
   const ensureChain = useCallback(async () => {
     if (!window.ethereum) return false;
     try {
@@ -86,7 +87,6 @@ function useEvmWallet() {
         method: "wallet_switchEthereumChain",
         params: [{ chainId: CHAIN_ID_HEX }],
       });
-      // Refresh provider after switch
       const _provider = new BrowserProvider(window.ethereum);
       const _signer = await _provider.getSigner();
       setProvider(_provider);
@@ -99,15 +99,12 @@ function useEvmWallet() {
     }
   }, []);
 
-  // 4. Auto-Connect & Event Listeners
   useEffect(() => {
     if (typeof window === "undefined" || !window.ethereum) return;
     
     const _provider = new BrowserProvider(window.ethereum);
 
-    // Initial Check logic
     const initConnection = async () => {
-        // ONLY connect if user has previously connected (checked via localStorage)
         const shouldConnect = localStorage.getItem(STORAGE_KEY) === "true";
         if (!shouldConnect) return;
 
@@ -121,7 +118,6 @@ function useEvmWallet() {
                 setAddress(accounts[0]);
                 setChainId(Number(network.chainId));
             } else {
-                // Storage says yes, but wallet is locked/empty. Sync storage.
                 localStorage.removeItem(STORAGE_KEY);
             }
         } catch (e) {
@@ -131,18 +127,15 @@ function useEvmWallet() {
 
     initConnection();
 
-    // Event Listeners from Wallet (MetaMask, etc.)
     const handleAccountsChanged = async (accs: string[]) => {
       if (accs.length === 0) {
-        // Wallet locked or disconnected from extension
         disconnect();
       } else {
-        // Account switched
         const _signer = await _provider.getSigner();
         setProvider(_provider);
         setSigner(_signer);
         setAddress(accs[0]);
-        localStorage.setItem(STORAGE_KEY, "true"); // Update intent
+        localStorage.setItem(STORAGE_KEY, "true");
       }
     };
     
@@ -165,7 +158,6 @@ function useEvmWallet() {
 // --- Main Component ---
 
 export default function CreatePage() {
-  // Using the advanced hook with disconnect
   const { provider, signer, address, chainId, connect, disconnect, isConnecting, ensureChain } = useEvmWallet();
 
   // State
@@ -184,14 +176,16 @@ export default function CreatePage() {
   const [isResolving, setIsResolving] = useState(false);
   const [needsApproval, setNeedsApproval] = useState(false);
   const [loadingStep, setLoadingStep] = useState<"IDLE" | "APPROVING" | "CREATING">("IDLE");
-  const [txHash, setTxHash] = useState("");
-  const [showSuccess, setShowSuccess] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  
+  // Success Modal State
+  const [showSuccess, setShowSuccess] = useState(false);
+  // NEW: Store successful gift data separately to prevent it from disappearing on form reset
+  const [successData, setSuccessData] = useState<any>(null);
 
   // 1. Fetch Balances
   useEffect(() => {
     if (!address || !provider) {
-        // Reset balances if disconnected
         setBalances({ ETH: "0.0", USDC: "0.0" });
         return;
     }
@@ -326,14 +320,12 @@ export default function CreatePage() {
       const amountWei = parseUnits(amount, decimals);
       const unlockTimestamp = Math.floor(new Date(`${unlockDate}T${unlockTime}`).getTime() / 1000);
 
-      // JSON Encode for Anonymity Support
       const metadata = {
         content: message || "",
         isAnonymous: isAnonymous
       };
       const obfuscatedMessage = btoa(JSON.stringify(metadata));
 
-      // Approve USDC if needed
       if (selectedToken === "USDC") {
         const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
         if (allowance < amountWei) {
@@ -343,7 +335,6 @@ export default function CreatePage() {
         }
       }
 
-      // Create Gift
       setLoadingStep("CREATING");
       
       const tokenArg = selectedToken === "ETH" ? ZeroAddress : USDC_ADDRESS;
@@ -359,7 +350,19 @@ export default function CreatePage() {
       );
 
       await tx.wait();
-      setTxHash(tx.hash);
+      
+      // Store success data BEFORE resetting state
+      setSuccessData({
+         token: selectedToken,
+         amount: amount,
+         recipient: resolvedAddress,
+         unlockDate: new Date(`${unlockDate}T${unlockTime}`),
+         message: message, 
+         txHash: tx.hash,
+         nftTokenId: "Minted",
+         isAnonymous: isAnonymous
+      });
+
       setShowSuccess(true);
       
       // Reset Form
@@ -388,7 +391,7 @@ export default function CreatePage() {
         isConnected={!!address}
         address={address}
         onConnect={connect}
-        onDisconnect={disconnect} // Using the smart disconnect
+        onDisconnect={disconnect}
       />
 
       <ConfettiEffect trigger={showSuccess} />
@@ -416,13 +419,13 @@ export default function CreatePage() {
             </div>
             <div className="flex gap-2">
                 <button 
-                    onClick={() => setSelectedToken("ETH")}
+                    onClick={() => { setSelectedToken("ETH"); setAmount(""); }}
                     className={cn("flex-1 rounded-xl border p-3 font-medium transition-all", selectedToken === "ETH" ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-secondary")}
                 >
                     ETH
                 </button>
                 <button 
-                    onClick={() => setSelectedToken("USDC")}
+                    onClick={() => { setSelectedToken("USDC"); setAmount(""); }}
                     className={cn("flex-1 rounded-xl border p-3 font-medium transition-all", selectedToken === "USDC" ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-secondary")}
                 >
                     USDC
@@ -430,7 +433,7 @@ export default function CreatePage() {
             </div>
           </div>
 
-          {/* Amount */}
+          {/* Amount Input with Quick Suggestions */}
           <div className="rounded-2xl border border-border bg-card p-4">
             <label className="text-sm font-medium">Amount</label>
             <div className="mt-2 flex items-center gap-2 rounded-xl border border-border bg-secondary p-3">
@@ -443,6 +446,20 @@ export default function CreatePage() {
                 />
                 <span className="text-sm font-bold text-muted-foreground">{selectedToken}</span>
             </div>
+            
+            {/* NEW: Quick Suggestion Chips */}
+            <div className="mt-3 flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                {(selectedToken === "ETH" ? ETH_PRESETS : USDC_PRESETS).map((val) => (
+                    <button
+                        key={val}
+                        onClick={() => setAmount(val)}
+                        className="flex items-center gap-1 whitespace-nowrap rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-all hover:border-primary hover:text-primary active:scale-95"
+                    >
+                        <Sparkles className="h-3 w-3" /> {val}
+                    </button>
+                ))}
+            </div>
+
             {errors.amount && <p className="mt-2 text-xs text-red-500">{errors.amount}</p>}
           </div>
 
@@ -553,25 +570,18 @@ export default function CreatePage() {
       
       <BottomNav />
       
-      {/* Success Modal */}
+      {/* Success Modal - Updated to use persistent successData */}
       <GiftModal
         isOpen={showSuccess}
         onClose={() => setShowSuccess(false)}
         type="success"
-        gift={{
-             token: selectedToken,
-             amount: amount,
-             recipient: resolvedAddress,
-             unlockDate: new Date(`${unlockDate}T${unlockTime}`),
-             message: message, 
-             txHash: txHash,
-             nftTokenId: "Minted",
-             isAnonymous: isAnonymous
-        }}
+        gift={successData || {}} // Use the stored data
         onSendAnother={() => {
             setShowSuccess(false);
             setAmount("");
             setMessage("");
+            // Optional: reset successData if you want
+            // setSuccessData(null); 
         }}
       />
     </div>
