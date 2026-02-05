@@ -1,14 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useEffect, useCallback } from "react";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
 import { ConfettiEffect } from "@/components/confetti-effect";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
 import {
-  Calendar, Clock, Clipboard, Info, Loader2, Gift, Wallet, CheckCircle2, AlertTriangle, User, UserX
+  Clipboard, Info, Loader2, Gift, AlertTriangle, User, UserX
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
@@ -18,6 +17,7 @@ const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const CHAIN_ID_HEX = "0x14a34"; // Base Sepolia
 const CHAIN_ID_DECIMAL = 84532;
+const STORAGE_KEY = "yupp_wallet_connected"; // Key to track user intent
 
 // --- ABIs ---
 const ERC20_ABI = [
@@ -32,9 +32,7 @@ const GIFT_CONTRACT_ABI = [
   "function createGift(address _recipient, address _tokenAddress, uint256 _amount, uint256 _unlockTime, string _message) payable"
 ];
 
-// --- Helper Hooks ---
-
-// 1. Hook for robust wallet connection
+// --- Advanced Wallet Hook ---
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
@@ -42,6 +40,7 @@ function useEvmWallet() {
   const [chainId, setChainId] = useState<number | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
 
+  // 1. Connect Function (Manually triggered by user)
   const connect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     setIsConnecting(true);
@@ -56,6 +55,8 @@ function useEvmWallet() {
         setSigner(_signer);
         setAddress(accounts[0]);
         setChainId(Number(network.chainId));
+        // Mark as intentionally connected
+        localStorage.setItem(STORAGE_KEY, "true");
       }
     } catch (e) {
       console.error("Connection failed:", e);
@@ -64,6 +65,17 @@ function useEvmWallet() {
     }
   }, []);
 
+  // 2. Disconnect Function
+  const disconnect = useCallback(() => {
+    setAddress("");
+    setSigner(null);
+    setProvider(null);
+    setChainId(null);
+    // Remove the flag so it doesn't auto-connect next time
+    localStorage.removeItem(STORAGE_KEY);
+  }, []);
+
+  // 3. Ensure Chain Function
   const ensureChain = useCallback(async () => {
     if (!window.ethereum) return false;
     try {
@@ -87,38 +99,54 @@ function useEvmWallet() {
     }
   }, []);
 
-  // Auto connect via eth_accounts (silent)
+  // 4. Auto-Connect & Event Listeners
   useEffect(() => {
     if (typeof window === "undefined" || !window.ethereum) return;
     
-    const checkConnection = async () => {
-      const _provider = new BrowserProvider(window.ethereum);
-      const accounts = await _provider.send("eth_accounts", []);
-      if (accounts.length > 0) {
-        const network = await _provider.getNetwork();
+    const _provider = new BrowserProvider(window.ethereum);
+
+    // Initial Check logic
+    const initConnection = async () => {
+        // ONLY connect if user has previously connected (checked via localStorage)
+        const shouldConnect = localStorage.getItem(STORAGE_KEY) === "true";
+        if (!shouldConnect) return;
+
+        try {
+            const accounts = await _provider.send("eth_accounts", []);
+            if (accounts.length > 0) {
+                const network = await _provider.getNetwork();
+                const _signer = await _provider.getSigner();
+                setProvider(_provider);
+                setSigner(_signer);
+                setAddress(accounts[0]);
+                setChainId(Number(network.chainId));
+            } else {
+                // Storage says yes, but wallet is locked/empty. Sync storage.
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        } catch (e) {
+            console.error("Auto-connect check failed", e);
+        }
+    };
+
+    initConnection();
+
+    // Event Listeners from Wallet (MetaMask, etc.)
+    const handleAccountsChanged = async (accs: string[]) => {
+      if (accs.length === 0) {
+        // Wallet locked or disconnected from extension
+        disconnect();
+      } else {
+        // Account switched
         const _signer = await _provider.getSigner();
         setProvider(_provider);
         setSigner(_signer);
-        setAddress(accounts[0]);
-        setChainId(Number(network.chainId));
-      }
-    };
-
-    checkConnection();
-
-    // Listeners
-    const handleAccountsChanged = (accs: string[]) => {
-      if (accs.length === 0) {
-        setAddress("");
-        setSigner(null);
-      } else {
         setAddress(accs[0]);
-        // Re-initialize signer/provider is safest
-        checkConnection(); 
+        localStorage.setItem(STORAGE_KEY, "true"); // Update intent
       }
     };
     
-    const handleChainChanged = () => window.location.reload(); // Best practice for chain change
+    const handleChainChanged = () => window.location.reload(); 
 
     window.ethereum.on("accountsChanged", handleAccountsChanged);
     window.ethereum.on("chainChanged", handleChainChanged);
@@ -129,15 +157,16 @@ function useEvmWallet() {
             window.ethereum.removeListener("chainChanged", handleChainChanged);
         }
     };
-  }, []);
+  }, [disconnect]);
 
-  return { provider, signer, address, chainId, connect, isConnecting, ensureChain };
+  return { provider, signer, address, chainId, connect, disconnect, isConnecting, ensureChain };
 }
 
 // --- Main Component ---
 
 export default function CreatePage() {
-  const { provider, signer, address, chainId, connect, isConnecting, ensureChain } = useEvmWallet();
+  // Using the advanced hook with disconnect
+  const { provider, signer, address, chainId, connect, disconnect, isConnecting, ensureChain } = useEvmWallet();
 
   // State
   const [selectedToken, setSelectedToken] = useState<"ETH" | "USDC">("ETH");
@@ -151,7 +180,7 @@ export default function CreatePage() {
 
   // Status State
   const [balances, setBalances] = useState({ ETH: "0.0", USDC: "0.0" });
-  const [usdcDecimals, setUsdcDecimals] = useState(6); // Default 6
+  const [usdcDecimals, setUsdcDecimals] = useState(6);
   const [isResolving, setIsResolving] = useState(false);
   const [needsApproval, setNeedsApproval] = useState(false);
   const [loadingStep, setLoadingStep] = useState<"IDLE" | "APPROVING" | "CREATING">("IDLE");
@@ -159,19 +188,20 @@ export default function CreatePage() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // 1. Fetch Balances & Decimals
+  // 1. Fetch Balances
   useEffect(() => {
-    if (!address || !provider) return;
+    if (!address || !provider) {
+        // Reset balances if disconnected
+        setBalances({ ETH: "0.0", USDC: "0.0" });
+        return;
+    }
     
     const fetchData = async () => {
       try {
-        // ETH
         const ethRaw = await provider.getBalance(address);
-        
-        // USDC
         const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
         const usdcRaw = await usdcContract.balanceOf(address);
-        const decimals = await usdcContract.decimals(); // Dynamic fetch
+        const decimals = await usdcContract.decimals();
         
         setUsdcDecimals(Number(decimals));
         setBalances({
@@ -183,12 +213,11 @@ export default function CreatePage() {
       }
     };
     fetchData();
-    // Poll every 10s for updates
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, [address, provider]);
 
-  // 2. Check Approval Requirement
+  // 2. Check Approval
   useEffect(() => {
     if (selectedToken === "USDC" && address && signer) {
       const checkAllowance = async () => {
@@ -196,7 +225,6 @@ export default function CreatePage() {
           const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
           const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
           
-          // If input amount is valid, check against it, otherwise check against 0
           let checkAmount = BigInt(0);
           try {
              checkAmount = parseUnits(amount || "0", usdcDecimals);
@@ -205,8 +233,6 @@ export default function CreatePage() {
           if (allowance < checkAmount && checkAmount > BigInt(0)) {
             setNeedsApproval(true);
           } else {
-             // If we have infinite approval (very large number), we don't need approval
-             // Or if amount is 0, we assume no approval needed yet
              setNeedsApproval(allowance === BigInt(0) && parseFloat(amount) > 0);
           }
         } catch (e) { console.error(e); }
@@ -232,7 +258,6 @@ export default function CreatePage() {
       return;
     }
 
-    // Resolve ENS/Basename
     setIsResolving(true);
     try {
       if (provider) {
@@ -240,7 +265,7 @@ export default function CreatePage() {
         if (resolved) {
           setResolvedAddress(resolved);
         } else {
-          setResolvedAddress(""); // Invalid name
+          setResolvedAddress("");
         }
       }
     } catch {
@@ -254,7 +279,6 @@ export default function CreatePage() {
   const validate = () => {
     const newErrors: Record<string, string> = {};
     
-    // Amount
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
       newErrors.amount = "Enter valid amount";
     } else {
@@ -262,15 +286,13 @@ export default function CreatePage() {
       if (parseFloat(amount) > parseFloat(bal)) newErrors.amount = "Insufficient balance";
     }
 
-    // Address
     if (!resolvedAddress) newErrors.recipient = "Invalid address or name";
 
-    // Time
     if (!unlockDate || !unlockTime) {
       newErrors.date = "Select date & time";
     } else {
       const targetTime = new Date(`${unlockDate}T${unlockTime}`);
-      const minTime = new Date(Date.now() + 60 * 1000); // 1 minute from now
+      const minTime = new Date(Date.now() + 60 * 1000); 
       if (targetTime < minTime) {
         newErrors.date = "Time must be at least 1 min in future";
       }
@@ -288,7 +310,6 @@ export default function CreatePage() {
         return;
     }
     
-    // Ensure Chain
     const correctChain = await ensureChain();
     if (!correctChain) {
         setErrors({ submit: "Wrong network. Switch to Base Sepolia." });
@@ -301,27 +322,28 @@ export default function CreatePage() {
       const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
       const giftContract = new Contract(CONTRACT_ADDRESS, GIFT_CONTRACT_ABI, signer);
       
-      // Calculate Amounts safely
       const decimals = selectedToken === "ETH" ? 18 : usdcDecimals;
       const amountWei = parseUnits(amount, decimals);
       const unlockTimestamp = Math.floor(new Date(`${unlockDate}T${unlockTime}`).getTime() / 1000);
 
-      // --- Obfuscate Message (Base64) ---
-      // This is NOT encryption, but it hides raw text from casual block explorer reading
-      const obfuscatedMessage = btoa(message || ""); 
+      // JSON Encode for Anonymity Support
+      const metadata = {
+        content: message || "",
+        isAnonymous: isAnonymous
+      };
+      const obfuscatedMessage = btoa(JSON.stringify(metadata));
 
-      // --- Step A: Approval (if USDC) ---
+      // Approve USDC if needed
       if (selectedToken === "USDC") {
         const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
         if (allowance < amountWei) {
             setLoadingStep("APPROVING");
-            // Approve Max to avoid future prompts
             const txApprove = await usdcContract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
             await txApprove.wait();
         }
       }
 
-      // --- Step B: Create Gift ---
+      // Create Gift
       setLoadingStep("CREATING");
       
       const tokenArg = selectedToken === "ETH" ? ZeroAddress : USDC_ADDRESS;
@@ -348,7 +370,7 @@ export default function CreatePage() {
     } catch (err: any) {
       console.error(err);
       setLoadingStep("IDLE");
-      if (err.code === "ACTION_REJECTED") return; // User rejected
+      if (err.code === "ACTION_REJECTED") return;
       setErrors({ submit: "Transaction failed. Check console." });
     }
   };
@@ -366,19 +388,17 @@ export default function CreatePage() {
         isConnected={!!address}
         address={address}
         onConnect={connect}
-        onDisconnect={() => window.location.reload()}
+        onDisconnect={disconnect} // Using the smart disconnect
       />
 
       <ConfettiEffect trigger={showSuccess} />
 
       <main className="mx-auto max-w-[480px] px-4 py-6">
-        {/* Intro */}
         <div className="mb-6 text-center">
              <h1 className="text-2xl font-bold">Create Gift</h1>
              <p className="text-muted-foreground text-sm">Send crypto locked until a future date</p>
         </div>
 
-        {/* Network Warning */}
         {chainId && chainId !== CHAIN_ID_DECIMAL && (
             <div className="mb-4 flex items-center gap-2 rounded-lg bg-yellow-500/10 p-3 text-yellow-500 text-sm">
                 <AlertTriangle className="h-4 w-4" />
@@ -388,7 +408,7 @@ export default function CreatePage() {
 
         <div className="space-y-4">
           
-          {/* 1. Asset Selection */}
+          {/* Asset Selection */}
           <div className="rounded-2xl border border-border bg-card p-4">
             <div className="mb-3 flex justify-between text-xs text-muted-foreground">
                 <span>Select Asset</span>
@@ -410,7 +430,7 @@ export default function CreatePage() {
             </div>
           </div>
 
-          {/* 2. Amount */}
+          {/* Amount */}
           <div className="rounded-2xl border border-border bg-card p-4">
             <label className="text-sm font-medium">Amount</label>
             <div className="mt-2 flex items-center gap-2 rounded-xl border border-border bg-secondary p-3">
@@ -426,7 +446,7 @@ export default function CreatePage() {
             {errors.amount && <p className="mt-2 text-xs text-red-500">{errors.amount}</p>}
           </div>
 
-           {/* 3. Recipient */}
+           {/* Recipient */}
            <div className="rounded-2xl border border-border bg-card p-4">
             <label className="text-sm font-medium">To (Address / Basename)</label>
             <div className="relative mt-2">
@@ -447,7 +467,7 @@ export default function CreatePage() {
             {errors.recipient && <p className="mt-2 text-xs text-red-500">{errors.recipient}</p>}
           </div>
 
-          {/* 4. Message (Hidden) */}
+          {/* Message */}
           <div className="rounded-2xl border border-border bg-card p-4">
             <div className="mb-2 flex justify-between">
                 <label className="text-sm font-medium">Message</label>
@@ -463,7 +483,24 @@ export default function CreatePage() {
             />
           </div>
 
-          {/* 5. Time & Date */}
+          {/* Anonymous Toggle */}
+          <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
+            <div className="flex items-center gap-2">
+                {isAnonymous ? <UserX className="h-5 w-5 text-primary" /> : <User className="h-5 w-5 text-muted-foreground" />}
+                <div className="flex flex-col">
+                    <span className="text-sm font-medium">Send Anonymously</span>
+                    <span className="text-[10px] text-muted-foreground">Hide your address in the app</span>
+                </div>
+            </div>
+            <button 
+                onClick={() => setIsAnonymous(!isAnonymous)}
+                className={cn("h-6 w-11 rounded-full transition-colors relative", isAnonymous ? "bg-primary" : "bg-muted")}
+            >
+                <span className={cn("absolute top-1 h-4 w-4 rounded-full bg-white transition-all", isAnonymous ? "left-6" : "left-1")} />
+            </button>
+          </div>
+
+          {/* Time & Date */}
           <div className="rounded-2xl border border-border bg-card p-4">
             <label className="text-sm font-medium">Unlock Time</label>
             <div className="mt-2 flex gap-3">
@@ -526,7 +563,7 @@ export default function CreatePage() {
              amount: amount,
              recipient: resolvedAddress,
              unlockDate: new Date(`${unlockDate}T${unlockTime}`),
-             message: message, // Passed plain here for preview, but on chain it's base64
+             message: message, 
              txHash: txHash,
              nftTokenId: "Minted",
              isAnonymous: isAnonymous
