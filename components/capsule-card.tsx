@@ -1,17 +1,20 @@
 "use client";
 
+import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Lock, Unlock, ExternalLink } from "lucide-react";
+import { Lock, Unlock, Clock, ArrowRight, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 interface CapsuleCardProps {
   type: "sent" | "received";
-  recipient?: string;
   sender?: string;
+  recipient?: string;
   amount: string;
   token: "ETH" | "USDC";
   unlockDate: Date;
   isUnlocked: boolean;
+  isWithdrawn?: boolean;
   message?: string;
   txHash?: string;
   onClaim?: () => void;
@@ -20,165 +23,128 @@ interface CapsuleCardProps {
 
 export function CapsuleCard({
   type,
-  recipient,
   sender,
+  recipient,
   amount,
   token,
   unlockDate,
   isUnlocked,
-  message,
-  txHash,
+  isWithdrawn,
   onClaim,
   onClick,
 }: CapsuleCardProps) {
-  const timeUntilUnlock = unlockDate.getTime() - Date.now();
-  const daysUntilUnlock = Math.max(
-    0,
-    Math.floor(timeUntilUnlock / (1000 * 60 * 60 * 24))
-  );
-  const hoursUntilUnlock = Math.max(
-    0,
-    Math.floor((timeUntilUnlock % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  );
+  const [timeLeft, setTimeLeft] = useState("");
 
-  const progress = isUnlocked
-    ? 100
-    : Math.min(100, ((Date.now() - (unlockDate.getTime() - 7 * 24 * 60 * 60 * 1000)) / (7 * 24 * 60 * 60 * 1000)) * 100);
+  // --- Real-time Countdown Logic ---
+  useEffect(() => {
+    if (isWithdrawn) return;
+    
+    const updateTimer = () => {
+      const now = new Date();
+      const diff = unlockDate.getTime() - now.getTime();
+
+      if (diff <= 0) {
+        setTimeLeft("Unlocked");
+        return;
+      }
+
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+      let timeString = "";
+      if (days > 0) timeString += `${days}d `;
+      if (hours > 0) timeString += `${hours}h `;
+      timeString += `${minutes}m`; // মিনিট যুক্ত করা হয়েছে
+
+      setTimeLeft(timeString);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 60000); // প্রতি মিনিটে আপডেট হবে
+    return () => clearInterval(interval);
+  }, [unlockDate, isWithdrawn]);
 
   return (
     <motion.div
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      className="cursor-pointer rounded-2xl border border-border bg-card p-4 transition-all duration-300 hover:border-primary/30 hover:shadow-[0_0_30px_rgba(0,82,255,0.1)]"
+      whileHover={{ scale: 1.01 }}
+      whileTap={{ scale: 0.99 }}
       onClick={onClick}
+      className="group relative overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm transition-all hover:border-primary/50"
     >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div
-            className={cn(
-              "flex h-10 w-10 items-center justify-center rounded-xl",
-              token === "ETH"
-                ? "bg-gradient-to-br from-[#627EEA] to-[#8B9FFF]"
-                : "bg-gradient-to-br from-[#2775CA] to-[#5BA3E0]"
-            )}
-          >
-            {token === "ETH" ? (
-              <EthIcon className="h-5 w-5 text-foreground" />
-            ) : (
-              <UsdcIcon className="h-5 w-5 text-foreground" />
-            )}
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">
-              {type === "sent" ? "To:" : "From:"}{" "}
-              {type === "sent"
-                ? recipient
-                  ? `${recipient.slice(0, 6)}...${recipient.slice(-4)}`
-                  : "Unknown"
-                : sender || "Anonymous"}
-            </p>
-            <p className="text-lg font-semibold text-foreground">
-              {amount} {token}
-            </p>
-          </div>
+      {/* Top Row: Sender/Recipient & Status */}
+      <div className="mb-3 flex items-start justify-between">
+        <div className="flex flex-col overflow-hidden">
+          <span className="text-[10px] uppercase text-muted-foreground">
+            {type === "sent" ? "To:" : "From:"}
+          </span>
+          {/* Truncate ensures text stays inside box */}
+          <span className="truncate text-sm font-semibold text-foreground max-w-[180px]">
+            {type === "sent" ? recipient : sender}
+          </span>
         </div>
 
-        <div
-          className={cn(
-            "flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium",
-            isUnlocked
-              ? "bg-success/10 text-success"
-              : "bg-primary/10 text-primary"
-          )}
-        >
-          {isUnlocked ? (
-            <>
-              <Unlock className="h-3 w-3" />
-              Unlocked
-            </>
+        {/* Status Badge */}
+        <div className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border",
+          isWithdrawn 
+            ? "bg-muted text-muted-foreground border-border"
+            : isUnlocked
+            ? "bg-green-500/10 text-green-500 border-green-500/20"
+            : "bg-orange-500/10 text-orange-500 border-orange-500/20"
+        )}>
+          {isWithdrawn ? (
+            <>Claimed <CheckCircle2 className="h-3 w-3" /></>
+          ) : isUnlocked ? (
+            <>Unlocked <Unlock className="h-3 w-3" /></>
           ) : (
-            <>
-              <Lock className="h-3 w-3" />
-              Locked
-            </>
+            <>Locked <Lock className="h-3 w-3" /></>
           )}
         </div>
       </div>
 
-      {!isUnlocked && type === "received" && (
-        <div className="mt-4">
-          <div className="mb-1 flex justify-between text-xs">
-            <span className="text-muted-foreground">
-              Unlocks in {daysUntilUnlock}d {hoursUntilUnlock}h
-            </span>
-            <span className="text-primary">{Math.round(progress)}%</span>
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-            <motion.div
-              className="h-full bg-gradient-to-r from-primary to-accent"
-              initial={{ width: 0 }}
-              animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.5 }}
-            />
-          </div>
+      {/* Middle Row: Amount */}
+      <div className="mb-4 flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
+          {/* Simple Icon placeholder based on token */}
+          {token === "ETH" ? (
+             <div className="h-6 w-6 rounded-full bg-purple-500/20 text-purple-500 flex items-center justify-center font-bold text-xs">Ξ</div>
+          ) : (
+             <div className="h-6 w-6 rounded-full bg-blue-500/20 text-blue-500 flex items-center justify-center font-bold text-xs">$</div>
+          )}
         </div>
-      )}
+        <div>
+          <h4 className="text-xl font-bold text-foreground">
+            {amount} <span className="text-sm font-normal text-muted-foreground">{token}</span>
+          </h4>
+        </div>
+      </div>
 
-      <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-        <p className="text-xs text-muted-foreground">
-          {unlockDate.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          })}
-        </p>
+      {/* Bottom Row: Date & Action */}
+      <div className="flex items-center justify-between border-t border-border pt-3">
+        <div className="flex flex-col">
+            <span className="text-[10px] text-muted-foreground">Unlock Date</span>
+            {/* Show Countdown if locked, else Date */}
+            <span className={cn("text-xs font-medium", !isUnlocked && !isWithdrawn ? "text-orange-500" : "text-foreground")}>
+                {!isUnlocked && !isWithdrawn ? `Opens in ${timeLeft}` : unlockDate.toLocaleDateString()}
+            </span>
+        </div>
 
-        {type === "received" && isUnlocked && onClaim && (
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+        {onClaim ? (
+          <Button 
+            size="sm" 
             onClick={(e) => {
               e.stopPropagation();
               onClaim();
             }}
-            className="rounded-lg bg-success px-3 py-1.5 text-xs font-medium text-success-foreground"
+            className="h-8 bg-green-600 hover:bg-green-700 text-white text-xs px-4"
           >
             Claim
-          </motion.button>
-        )}
-
-        {txHash && (
-          <a
-            href={`https://basescan.org/tx/${txHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
-          >
-            <ExternalLink className="h-3 w-3" />
-            View
-          </a>
+          </Button>
+        ) : (
+            // Show arrow for Sent or Locked items to imply details
+            <ArrowRight className="h-4 w-4 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
     </motion.div>
-  );
-}
-
-function EthIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 1.5l-7.5 11.25L12 17.25l7.5-4.5L12 1.5zm0 17.25l-7.5-4.5L12 22.5l7.5-8.25-7.5 4.5z" />
-    </svg>
-  );
-}
-
-function UsdcIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M12 6v2m0 8v2m-2-9.5c0-.83.67-1.5 1.5-1.5h1c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-1c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5h1c.83 0 1.5-.67 1.5-1.5" />
-    </svg>
   );
 }
