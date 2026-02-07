@@ -6,6 +6,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
+import { TrustSection } from "@/components/trust-section"; // নতুন সেকশন ইমপোর্ট
 import { Lock, Diamond, Shield, Gift, ArrowRight, AlertCircle } from "lucide-react";
 import { ethers, BrowserProvider, Contract, formatEther, JsonRpcProvider } from "ethers";
 import { Button } from "@/components/ui/button";
@@ -31,14 +32,13 @@ export default function HomePage() {
     activeUsers: "...",
   });
 
-  // --- 1. Wallet Logic (Improved) ---
+  // --- 1. Wallet Logic ---
   
   // A. Silent Connect (For Page Load)
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
       const provider = new BrowserProvider(window.ethereum);
-      // Silent check (Doesn't open popup)
       const accounts = await provider.send("eth_accounts", []);
       if (accounts.length > 0) {
         setAddress(accounts[0]);
@@ -55,7 +55,6 @@ export default function HomePage() {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
       const provider = new BrowserProvider(window.ethereum);
-      // Request permission (Opens popup)
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       
       if (accounts[0]) {
@@ -175,14 +174,19 @@ export default function HomePage() {
           <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless smart contracts." delay={0.4} />
         </section>
 
-        {/* Trust */}
+        {/* Trust & Transparency */}
         <section className="rounded-3xl bg-secondary/50 p-6">
           <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
           <div className="space-y-4">
              <TrustLink href={`https://base-sepolia.blockscout.com/address/${CONTRACT_ADDRESS}`} text="View Contract on Blockscout" />
              <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
+             {/* Audit Report Link Added */}
+             <TrustLink href="#" text="View Audit Report" />
           </div>
         </section>
+
+        {/* New FAQ/Trust Section */}
+        <TrustSection />
       </main>
 
       <BottomNav />
