@@ -7,15 +7,14 @@ import { motion } from "framer-motion";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
 import { Lock, Diamond, Shield, Gift, ArrowRight } from "lucide-react";
-// Viem এর বদলে ethers ব্যবহার করা হলো সহজ ইন্টিগ্রেশনের জন্য
 import { ethers, BrowserProvider, Contract, formatEther, JsonRpcProvider } from "ethers";
 
 // Contract Configuration
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const BASE_SEPOLIA_ID = "0x14a34"; // Chain ID 84532
-const PUBLIC_RPC = "https://sepolia.base.org"; // Public RPC for stats without wallet
+const PUBLIC_RPC = "https://sepolia.base.org"; // Public RPC for stats
 
-// Correct ABI (সঠিক ফাংশন যা কন্ট্রাক্টে আছে)
+// ABI
 const CONTRACT_ABI = [
   "function giftCounter() view returns (uint256)",
   "function getGiftDetails(uint256 _giftId) view returns ((uint256 id, address sender, address recipient, address tokenAddress, uint256 amount, uint256 unlockTime, bool isWithdrawn, bool isCancelled, string message))"
@@ -33,11 +32,11 @@ export default function HomePage() {
     activeUsers: "...",
   });
 
-  // --- 1. Wallet Connection Logic (Fixed) ---
+  // --- Wallet Logic (Unified with other pages) ---
   const handleDisconnect = useCallback(() => {
     setIsConnected(false);
     setAddress("");
-    localStorage.removeItem("wallet_connected");
+    localStorage.removeItem("yupp_wallet_connected"); // Using same key as other pages
   }, []);
 
   const handleConnect = useCallback(async () => {
@@ -47,7 +46,6 @@ export default function HomePage() {
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       
       if (accounts[0]) {
-        // Switch Chain if needed
         const network = await provider.getNetwork();
         if (network.chainId !== 84532n) {
           try {
@@ -61,7 +59,7 @@ export default function HomePage() {
         }
         setAddress(accounts[0]);
         setIsConnected(true);
-        localStorage.setItem("wallet_connected", "true");
+        localStorage.setItem("yupp_wallet_connected", "true");
       }
     } catch (error) {
       console.error("Connection Failed", error);
@@ -70,30 +68,42 @@ export default function HomePage() {
 
   // Check connection on load
   useEffect(() => {
-    if (typeof window !== "undefined" && localStorage.getItem("wallet_connected") === "true") {
+    if (typeof window !== "undefined" && localStorage.getItem("yupp_wallet_connected") === "true") {
       handleConnect();
     }
-  }, [handleConnect]);
+    
+    // Listen for account changes
+    if (typeof window !== "undefined" && window.ethereum) {
+        window.ethereum.on("accountsChanged", (accounts: string[]) => {
+            if (accounts.length > 0) {
+                setAddress(accounts[0]);
+                setIsConnected(true);
+            } else {
+                handleDisconnect();
+            }
+        });
+    }
+  }, [handleConnect, handleDisconnect]);
 
 
-  // --- 2. Stats Fetching Logic (Fixed) ---
+  // --- Stats Fetching Logic ---
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        // ওয়ালেট কানেক্ট না থাকলেও ডাটা দেখাবে (Public RPC দিয়ে)
         const provider = new JsonRpcProvider(PUBLIC_RPC);
         const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
 
-        // ১. মোট গিফট সংখ্যা বের করা
         const counter = await contract.giftCounter();
         const totalGifts = Number(counter);
 
         let totalEthValue = 0;
         const uniqueUsers = new Set();
         
-        // সব গিফট লুপ করে চেক করা (Parallel Fetching for speed)
+        // Fetch last 50 gifts for quicker stats, or all if small number (Optimization)
+        const fetchLimit = totalGifts; 
         const promises = [];
-        for (let i = 1; i <= totalGifts; i++) {
+        
+        for (let i = 1; i <= fetchLimit; i++) {
           promises.push(contract.getGiftDetails(i));
         }
         
@@ -103,7 +113,7 @@ export default function HomePage() {
           uniqueUsers.add(gift.sender);
           uniqueUsers.add(gift.recipient);
           
-          // শুধুমাত্র ETH গিফটগুলোর ভ্যালু যোগ করা হচ্ছে (Token Address 0x0 হলে ETH)
+          // Sum only ETH values
           if (gift.tokenAddress === ethers.ZeroAddress) {
             totalEthValue += parseFloat(formatEther(gift.amount));
           }
@@ -125,7 +135,6 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
-      {/* Header এ এখন কানেকশন প্রপস পাঠানো হচ্ছে যাতে বাটন কাজ করে */}
       <Header 
         isConnected={isConnected} 
         address={address} 
@@ -134,7 +143,7 @@ export default function HomePage() {
       />
 
       <main className="mx-auto max-w-[480px] px-6 py-8">
-        {/* Hero Section - Same Design */}
+        {/* Hero Section */}
         <section className="mb-12 flex flex-col items-center text-center">
           <motion.div
             className="mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-primary"
@@ -164,14 +173,14 @@ export default function HomePage() {
           </motion.p>
         </section>
 
-        {/* Real-time Stats - Fixed Data */}
+        {/* Real-time Stats */}
         <section className="mb-12 grid grid-cols-3 gap-2">
             <StatCard value={stats.giftsSent} label="Gifts" delay={0.2} />
             <StatCard value={stats.valueLocked} label="Locked" delay={0.3} />
             <StatCard value={stats.activeUsers} label="Users" delay={0.4} />
         </section>
 
-        {/* Feature Cards - Same Design */}
+        {/* Feature Cards */}
         <section className="mb-12 space-y-3">
           <FeatureCard
             icon={<Lock className="h-5 w-5" />}
@@ -193,7 +202,7 @@ export default function HomePage() {
           />
         </section>
 
-        {/* Trust Section - Same Design */}
+        {/* Trust Section */}
         <section className="rounded-3xl bg-secondary/50 p-6">
           <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">
             Transparency
@@ -208,8 +217,8 @@ export default function HomePage() {
               text="View Source Code" 
             />
             <TrustLink 
-              href="https://drive.google.com/file/d/14U56v5iqSL2GM2349a1xseV0v8Z-oITo/view?usp" 
-              text="Security Audit" 
+              href="#" 
+              text="Security Audit (Coming Soon)" 
             />
           </div>
         </section>
@@ -220,7 +229,7 @@ export default function HomePage() {
   );
 }
 
-// --- Sub Components (Unchanged) ---
+// --- Sub Components ---
 
 function FeatureCard({ icon, title, description, delay }: any) {
   return (

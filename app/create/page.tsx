@@ -9,12 +9,12 @@ import { ConfettiEffect } from "@/components/confetti-effect";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
 import {
-  Clipboard, Info, Loader2, Gift, AlertTriangle, User, UserX, Sparkles, ChevronDown
+  Clipboard, Loader2, AlertTriangle, User, UserX
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
 
-// ... (Constants and logic remain exactly the same) ...
+// Constants
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const CHAIN_ID_HEX = "0x14a34"; 
@@ -35,7 +35,7 @@ const GIFT_CONTRACT_ABI = [
   "function createGift(address _recipient, address _tokenAddress, uint256 _amount, uint256 _unlockTime, string _message) payable"
 ];
 
-// ... (Wallet Hook remains same) ...
+// Wallet Hook
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
@@ -150,7 +150,7 @@ export default function CreatePage() {
   const [unlockDate, setUnlockDate] = useState("");
   const [unlockTime, setUnlockTime] = useState("");
   const [message, setMessage] = useState("");
-  const [isAnonymous, setIsAnonymous] = useState(true);
+  const [isAnonymous, setIsAnonymous] = useState(false); // Changed to false by default
   const [balances, setBalances] = useState({ ETH: "0.0", USDC: "0.0" });
   const [usdcDecimals, setUsdcDecimals] = useState(6);
   const [isResolving, setIsResolving] = useState(false);
@@ -160,14 +160,13 @@ export default function CreatePage() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [successData, setSuccessData] = useState<any>(null);
 
-  // ... (Effects and Logic remain exactly the same) ...
-  useEffect(() => {
+  // Fetch Balances
+  const fetchBalances = useCallback(async () => {
     if (!address || !provider) {
         setBalances({ ETH: "0.0", USDC: "0.0" });
         return;
     }
-    const fetchData = async () => {
-      try {
+    try {
         const ethRaw = await provider.getBalance(address);
         const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
         const usdcRaw = await usdcContract.balanceOf(address);
@@ -178,12 +177,15 @@ export default function CreatePage() {
           USDC: formatUnits(usdcRaw, decimals)
         });
       } catch (e) { console.error("Balance fetch error:", e); }
-    };
-    fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
   }, [address, provider]);
 
+  useEffect(() => {
+    fetchBalances();
+    const interval = setInterval(fetchBalances, 10000);
+    return () => clearInterval(interval);
+  }, [fetchBalances]);
+
+  // Check Approval for USDC
   useEffect(() => {
     if (selectedToken === "USDC" && address && signer) {
       const checkAllowance = async () => {
@@ -265,7 +267,10 @@ export default function CreatePage() {
          message: message, txHash: tx.hash, nftTokenId: "Minted", isAnonymous: isAnonymous
       });
       setShowSuccess(true);
-      setAmount(""); setMessage(""); setLoadingStep("IDLE");
+      setLoadingStep("IDLE");
+      
+      // Update Balance immediately after send
+      fetchBalances();
 
     } catch (err: any) {
       console.error(err);
@@ -273,6 +278,18 @@ export default function CreatePage() {
       if (err.code === "ACTION_REJECTED") return;
       setErrors({ submit: "Transaction failed." });
     }
+  };
+
+  const handleResetForm = () => {
+    setShowSuccess(false);
+    setAmount("");
+    setRecipientInput("");
+    setResolvedAddress("");
+    setUnlockDate("");
+    setUnlockTime("");
+    setMessage("");
+    setIsAnonymous(false);
+    setSelectedToken("ETH");
   };
 
   const handlePaste = async () => {
@@ -300,7 +317,7 @@ export default function CreatePage() {
 
         <div className="space-y-6">
           
-          {/* Asset Selection - Base Style: Big Cards */}
+          {/* Asset Selection */}
           <div className="rounded-[2rem] border border-border bg-card p-6 shadow-sm">
             <div className="mb-4 flex justify-between items-center text-sm font-bold text-muted-foreground">
                 <span>Asset</span>
@@ -416,7 +433,7 @@ export default function CreatePage() {
             </div>
           </div>
 
-          {/* Action Button - Base Style: Big Blue Pill */}
+          {/* Action Button */}
           <Button
             onClick={handleSubmit}
             disabled={loadingStep !== "IDLE" || !address || isConnecting}
@@ -442,14 +459,10 @@ export default function CreatePage() {
       
       <GiftModal
         isOpen={showSuccess}
-        onClose={() => setShowSuccess(false)}
+        onClose={handleResetForm} 
         type="success"
         gift={successData || {}}
-        onSendAnother={() => {
-            setShowSuccess(false);
-            setAmount("");
-            setMessage("");
-        }}
+        onSendAnother={handleResetForm}
       />
     </div>
   );

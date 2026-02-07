@@ -9,22 +9,23 @@ import { BottomNav } from "@/components/bottom-nav";
 import { CapsuleCard } from "@/components/capsule-card";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
-import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, Coins, PartyPopper } from "lucide-react";
+import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 
-// ... (Constants and logic remain exactly the same) ...
+// Constants
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const STORAGE_KEY = "yupp_wallet_connected";
 
+// ABI
 const CONTRACT_ABI = [
   "function giftCounter() view returns (uint256)",
   "function getGiftDetails(uint256 _giftId) view returns ((uint256 id, address sender, address recipient, address tokenAddress, uint256 amount, uint256 unlockTime, bool isWithdrawn, bool isCancelled, string message))",
   "function withdrawGift(uint256 _giftId)"
 ];
 
-// ... (Helpers remain same) ...
+// Helpers
 const parseGiftMessage = (rawMsg: string) => {
     try {
       const decoded = atob(rawMsg);
@@ -40,7 +41,7 @@ const shortenAddress = (addr: string) => {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
 
-// ... (SuccessModal remains similar but with cleaner style) ...
+// Success Modal Component
 function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onClose: () => void; amount: string; token: string }) {
     if (!isOpen) return null;
     return (
@@ -74,7 +75,6 @@ function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onC
   }
 
 export default function CapsulesPage() {
-    // ... (All logic states remain exactly the same) ...
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
@@ -85,14 +85,16 @@ export default function CapsulesPage() {
   const [activeTab, setActiveTab] = useState<"sent" | "received">("received");
   const [filter, setFilter] = useState<"all" | "ETH" | "USDC">("all");
   const [copied, setCopied] = useState(false);
+  
   const [mySentCapsules, setMySentCapsules] = useState<any[]>([]);
   const [myReceivedCapsules, setMyReceivedCapsules] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
+  
   const [selectedCapsule, setSelectedCapsule] = useState<any | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
 
-  // ... (All effects and handlers logic remain same) ...
+  // --- Wallet Connection Logic ---
   const handleDisconnect = useCallback(() => {
     setIsConnected(false);
     setAddress("");
@@ -130,9 +132,11 @@ export default function CapsulesPage() {
       setIsConnected(true);
       localStorage.setItem(STORAGE_KEY, "true");
 
+      // Fetch Balance
       const bal = await _provider.getBalance(accounts[0]);
       setEthBalance(Number(formatEther(bal)).toFixed(4));
 
+      // Resolve ENS/Basename
       try {
         const name = await _provider.lookupAddress(accounts[0]);
         if (name) {
@@ -148,6 +152,7 @@ export default function CapsulesPage() {
     }
   }, [handleDisconnect]);
 
+  // Persist Connection
   useEffect(() => {
     if (typeof window === "undefined" || !window.ethereum) return;
     const checkPersisted = async () => {
@@ -163,6 +168,7 @@ export default function CapsulesPage() {
     return () => { if(window.ethereum) window.ethereum.removeListener("accountsChanged", handleAccChange); };
   }, [handleConnect, handleDisconnect]);
 
+  // --- Data Fetching Logic ---
   const fetchCapsules = useCallback(async () => {
     if (!provider || !address) return;
     setIsLoadingData(true);
@@ -173,6 +179,9 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
+      // Fetch gifts in reverse order (newest first)
+      const batchSize = 20; 
+      // Note: for production, limit this loop or use indexer. For mini-app, this is fine.
       for (let i = totalGifts; i >= 1; i--) {
         try {
           const gift = await contract.getGiftDetails(i);
@@ -204,7 +213,7 @@ export default function CapsulesPage() {
             isWithdrawn: gift.isWithdrawn,
             isAnonymous: isAnonymous,
             message: content,
-            txHash: "",
+            txHash: "", // Transaction hash not stored in struct, would need logs
             nftTokenId: gift.id.toString(),
           };
 
@@ -214,13 +223,14 @@ export default function CapsulesPage() {
 
           if (isRecipient) {
             const receivedData = { ...baseCapsuleData };
+            // Hide message logic for locked gifts
             if (!isUnlocked) {
               receivedData.message = "🔒 Message is hidden until unlocked";
             }
             received.push(receivedData);
           }
           
-        } catch (err) { console.error(err); }
+        } catch (err) { console.error("Error fetching gift ID:", i, err); }
       }
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
@@ -228,10 +238,12 @@ export default function CapsulesPage() {
     finally { setIsLoadingData(false); }
   }, [provider, address]);
 
+  // Auto-fetch when connected
   useEffect(() => {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
 
+  // --- Claim Logic ---
   const handleClaim = async () => {
     if (!selectedCapsule || !signer) return;
     setIsClaiming(true);
@@ -239,11 +251,19 @@ export default function CapsulesPage() {
       const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       const tx = await contract.withdrawGift(selectedCapsule.id);
       await tx.wait();
+      
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
+      
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
+      
+      // Refresh data
       fetchCapsules(); 
+      // Update balance
+      const bal = await provider?.getBalance(address);
+      if(bal) setEthBalance(Number(formatEther(bal)).toFixed(4));
+
     } catch (error: any) { 
       alert("Claim failed: " + (error.reason || error.message)); 
     } 
@@ -268,7 +288,7 @@ export default function CapsulesPage() {
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
-            {/* Wallet Card - Base Style: Clean Container */}
+            {/* Wallet Card */}
             <div className="mb-8 rounded-3xl bg-secondary p-6">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-4">
@@ -291,7 +311,7 @@ export default function CapsulesPage() {
               </div>
             </div>
 
-            {/* Controls - Base Style: Pill Tabs */}
+            {/* Controls */}
             <div className="mb-6 flex rounded-full bg-secondary p-1">
               <TabButton isActive={activeTab === "received"} onClick={() => setActiveTab("received")} label="Received" />
               <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
@@ -304,7 +324,7 @@ export default function CapsulesPage() {
               <FilterChip isActive={filter === "USDC"} onClick={() => setFilter("USDC")} label="USDC" />
             </div>
 
-            {/* List */}
+            {/* List Header */}
             <div className="flex justify-between items-center mb-4">
                <h3 className="font-bold text-lg">{activeTab === "sent" ? "Sent Gifts" : "Inbox"}</h3>
                <Button variant="ghost" size="icon" onClick={fetchCapsules} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
@@ -358,6 +378,7 @@ export default function CapsulesPage() {
       </main>
       <BottomNav />
       
+      {/* Detail Modal */}
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
@@ -369,6 +390,7 @@ export default function CapsulesPage() {
         />
       )}
 
+      {/* Claim Success Modal */}
       <AnimatePresence>
         {successModalData && (
           <SuccessModal 
@@ -384,7 +406,7 @@ export default function CapsulesPage() {
   );
 }
 
-// Subcomponents - Refined for Base Look
+// Subcomponents
 function NotConnectedState({ onConnect }: { onConnect: () => void }) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
@@ -412,7 +434,6 @@ function TabButton({ isActive, onClick, label }: any) {
     );
 }
 
-// --- UPDATED FILTER CHIP COMPONENT ---
 function FilterChip({ isActive, onClick, label }: any) {
     return (
         <button 
@@ -420,8 +441,8 @@ function FilterChip({ isActive, onClick, label }: any) {
             className={cn(
                 "rounded-full px-4 py-2 text-xs font-bold transition-colors border", 
                 isActive 
-                  ? "bg-black border-black text-white" // Active: Black BG, White Text
-                  : "bg-white border-gray-200 text-black hover:bg-gray-100" // Inactive: White BG, Black Text
+                  ? "bg-black border-black text-white" 
+                  : "bg-white border-gray-200 text-black hover:bg-gray-100" 
             )}
         >
             {label}
