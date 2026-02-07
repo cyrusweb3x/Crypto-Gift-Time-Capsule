@@ -8,13 +8,11 @@ import { BottomNav } from "@/components/bottom-nav";
 import { ConfettiEffect } from "@/components/confetti-effect";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
-import {
-  Clipboard, Loader2, AlertTriangle, User, UserX
-} from "lucide-react";
+import { Clipboard, Loader2, AlertTriangle, User, UserX, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
+import { motion } from "framer-motion";
 
-// Constants
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const CHAIN_ID_HEX = "0x14a34"; 
@@ -23,26 +21,37 @@ const STORAGE_KEY = "yupp_wallet_connected";
 const ETH_PRESETS = ["0.001", "0.01", "0.05", "0.1", "0.5"];
 const USDC_PRESETS = ["5", "10", "20", "50", "100"];
 
-const ERC20_ABI = [
-  "function balanceOf(address owner) view returns (uint256)",
-  "function approve(address spender, uint256 amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function decimals() view returns (uint8)",
-  "function symbol() view returns (string)"
-];
+const ERC20_ABI = ["function balanceOf(address owner) view returns (uint256)", "function approve(address spender, uint256 amount) returns (bool)", "function allowance(address owner, address spender) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)"];
+const GIFT_CONTRACT_ABI = ["function createGift(address _recipient, address _tokenAddress, uint256 _amount, uint256 _unlockTime, string _message) payable"];
 
-const GIFT_CONTRACT_ABI = [
-  "function createGift(address _recipient, address _tokenAddress, uint256 _amount, uint256 _unlockTime, string _message) payable"
-];
-
-// Wallet Hook
+// Wallet Hook with Silent Connect
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
   const [address, setAddress] = useState<string>("");
   const [chainId, setChainId] = useState<number | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
+  // Silent Connect
+  const checkConnection = useCallback(async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+        const _provider = new BrowserProvider(window.ethereum);
+        const accounts = await _provider.send("eth_accounts", []);
+        if (accounts.length > 0) {
+            const network = await _provider.getNetwork();
+            const _signer = await _provider.getSigner();
+            setProvider(_provider);
+            setSigner(_signer);
+            setAddress(accounts[0]);
+            setChainId(Number(network.chainId));
+            localStorage.setItem(STORAGE_KEY, "true");
+        }
+    } catch (e) { console.error("Silent connect error", e); }
+  }, []);
+
+  // Manual Connect
   const connect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     setIsConnecting(true);
@@ -50,7 +59,6 @@ function useEvmWallet() {
       const _provider = new BrowserProvider(window.ethereum);
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       const network = await _provider.getNetwork();
-      
       if (accounts[0]) {
         const _signer = await _provider.getSigner();
         setProvider(_provider);
@@ -59,19 +67,18 @@ function useEvmWallet() {
         setChainId(Number(network.chainId));
         localStorage.setItem(STORAGE_KEY, "true");
       }
-    } catch (e) {
-      console.error("Connection failed:", e);
-    } finally {
-      setIsConnecting(false);
-    }
+    } catch (e) { console.error("Connection failed:", e); } 
+    finally { setIsConnecting(false); }
   }, []);
 
-  const disconnect = useCallback(() => {
+  // Disconnect
+  const confirmDisconnect = useCallback(() => {
     setAddress("");
     setSigner(null);
     setProvider(null);
     setChainId(null);
     localStorage.removeItem(STORAGE_KEY);
+    setShowDisconnectAlert(false);
   }, []);
 
   const ensureChain = useCallback(async () => {
@@ -79,69 +86,32 @@ function useEvmWallet() {
     try {
       const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
       if (currentChainId === CHAIN_ID_HEX) return true;
-
-      await window.ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: CHAIN_ID_HEX }],
-      });
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_ID_HEX }] });
       const _provider = new BrowserProvider(window.ethereum);
       const _signer = await _provider.getSigner();
       setProvider(_provider);
       setSigner(_signer);
       setChainId(CHAIN_ID_DECIMAL);
       return true;
-    } catch (error) {
-      console.error("Chain switch failed:", error);
-      return false;
-    }
+    } catch (error) { console.error("Chain switch failed:", error); return false; }
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.ethereum) return;
-    const _provider = new BrowserProvider(window.ethereum);
-    const initConnection = async () => {
-        const shouldConnect = localStorage.getItem(STORAGE_KEY) === "true";
-        if (!shouldConnect) return;
-        try {
-            const accounts = await _provider.send("eth_accounts", []);
-            if (accounts.length > 0) {
-                const network = await _provider.getNetwork();
-                const _signer = await _provider.getSigner();
-                setProvider(_provider);
-                setSigner(_signer);
-                setAddress(accounts[0]);
-                setChainId(Number(network.chainId));
-            } else {
-                localStorage.removeItem(STORAGE_KEY);
-            }
-        } catch (e) { console.error("Auto-connect check failed", e); }
-    };
-    initConnection();
-    const handleAccountsChanged = async (accs: string[]) => {
-      if (accs.length === 0) { disconnect(); } else {
-        const _signer = await _provider.getSigner();
-        setProvider(_provider);
-        setSigner(_signer);
-        setAddress(accs[0]);
-        localStorage.setItem(STORAGE_KEY, "true");
-      }
-    };
-    const handleChainChanged = () => window.location.reload(); 
-    window.ethereum.on("accountsChanged", handleAccountsChanged);
-    window.ethereum.on("chainChanged", handleChainChanged);
-    return () => {
-        if (window.ethereum) {
-            window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
-            window.ethereum.removeListener("chainChanged", handleChainChanged);
-        }
-    };
-  }, [disconnect]);
+    if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
+    if (window.ethereum) {
+        window.ethereum.on("accountsChanged", (accs: string[]) => {
+            if (accs.length === 0) confirmDisconnect();
+            else checkConnection();
+        });
+        window.ethereum.on("chainChanged", () => window.location.reload());
+    }
+  }, [checkConnection, confirmDisconnect]);
 
-  return { provider, signer, address, chainId, connect, disconnect, isConnecting, ensureChain };
+  return { provider, signer, address, chainId, connect, disconnect: () => setShowDisconnectAlert(true), confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting, ensureChain };
 }
 
 export default function CreatePage() {
-  const { provider, signer, address, chainId, connect, disconnect, isConnecting, ensureChain } = useEvmWallet();
+  const { provider, signer, address, chainId, connect, disconnect, confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting, ensureChain } = useEvmWallet();
 
   const [selectedToken, setSelectedToken] = useState<"ETH" | "USDC">("ETH");
   const [amount, setAmount] = useState("");
@@ -150,7 +120,7 @@ export default function CreatePage() {
   const [unlockDate, setUnlockDate] = useState("");
   const [unlockTime, setUnlockTime] = useState("");
   const [message, setMessage] = useState("");
-  const [isAnonymous, setIsAnonymous] = useState(false); // Changed to false by default
+  const [isAnonymous, setIsAnonymous] = useState(false);
   const [balances, setBalances] = useState({ ETH: "0.0", USDC: "0.0" });
   const [usdcDecimals, setUsdcDecimals] = useState(6);
   const [isResolving, setIsResolving] = useState(false);
@@ -172,10 +142,7 @@ export default function CreatePage() {
         const usdcRaw = await usdcContract.balanceOf(address);
         const decimals = await usdcContract.decimals();
         setUsdcDecimals(Number(decimals));
-        setBalances({
-          ETH: formatUnits(ethRaw, 18),
-          USDC: formatUnits(usdcRaw, decimals)
-        });
+        setBalances({ ETH: formatUnits(ethRaw, 18), USDC: formatUnits(usdcRaw, decimals) });
       } catch (e) { console.error("Balance fetch error:", e); }
   }, [address, provider]);
 
@@ -185,7 +152,7 @@ export default function CreatePage() {
     return () => clearInterval(interval);
   }, [fetchBalances]);
 
-  // Check Approval for USDC
+  // Check Approval
   useEffect(() => {
     if (selectedToken === "USDC" && address && signer) {
       const checkAllowance = async () => {
@@ -268,8 +235,6 @@ export default function CreatePage() {
       });
       setShowSuccess(true);
       setLoadingStep("IDLE");
-      
-      // Update Balance immediately after send
       fetchBalances();
 
     } catch (err: any) {
@@ -292,16 +257,12 @@ export default function CreatePage() {
     setSelectedToken("ETH");
   };
 
-  const handlePaste = async () => {
-      try { const text = await navigator.clipboard.readText(); handleRecipientChange(text); } catch {}
-  };
+  const handlePaste = async () => { try { const text = await navigator.clipboard.readText(); handleRecipientChange(text); } catch {} };
 
   return (
     <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
       <Header isConnected={!!address} address={address} onConnect={connect} onDisconnect={disconnect} />
-
       <ConfettiEffect trigger={showSuccess} />
-
       <main className="mx-auto max-w-[480px] px-6 py-8">
         <div className="mb-8 text-center">
              <h1 className="text-3xl font-black tracking-tight">Create Gift</h1>
@@ -316,154 +277,93 @@ export default function CreatePage() {
         )}
 
         <div className="space-y-6">
-          
-          {/* Asset Selection */}
           <div className="rounded-[2rem] border border-border bg-card p-6 shadow-sm">
             <div className="mb-4 flex justify-between items-center text-sm font-bold text-muted-foreground">
                 <span>Asset</span>
                 <span>Bal: {selectedToken === "ETH" ? parseFloat(balances.ETH).toFixed(4) : parseFloat(balances.USDC).toFixed(2)}</span>
             </div>
-            
             <div className="mb-4 flex gap-3">
-                <button 
-                    onClick={() => { setSelectedToken("ETH"); setAmount(""); }}
-                    className={cn("flex-1 py-3 rounded-xl font-bold transition-all border-2", selectedToken === "ETH" ? "border-primary bg-primary/5 text-primary" : "border-transparent bg-secondary text-muted-foreground")}
-                >
-                    ETH
-                </button>
-                <button 
-                    onClick={() => { setSelectedToken("USDC"); setAmount(""); }}
-                    className={cn("flex-1 py-3 rounded-xl font-bold transition-all border-2", selectedToken === "USDC" ? "border-primary bg-primary/5 text-primary" : "border-transparent bg-secondary text-muted-foreground")}
-                >
-                    USDC
-                </button>
+                <button onClick={() => { setSelectedToken("ETH"); setAmount(""); }} className={cn("flex-1 py-3 rounded-xl font-bold transition-all border-2", selectedToken === "ETH" ? "border-primary bg-primary/5 text-primary" : "border-transparent bg-secondary text-muted-foreground")}>ETH</button>
+                <button onClick={() => { setSelectedToken("USDC"); setAmount(""); }} className={cn("flex-1 py-3 rounded-xl font-bold transition-all border-2", selectedToken === "USDC" ? "border-primary bg-primary/5 text-primary" : "border-transparent bg-secondary text-muted-foreground")}>USDC</button>
             </div>
-
             <div className="relative">
-                <input
-                    type="number"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full bg-transparent text-5xl font-black outline-none placeholder:text-muted-foreground/30 text-foreground py-2"
-                />
+                <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="w-full bg-transparent text-5xl font-black outline-none placeholder:text-muted-foreground/30 text-foreground py-2" />
             </div>
-            
             <div className="mt-4 flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
                 {(selectedToken === "ETH" ? ETH_PRESETS : USDC_PRESETS).map((val) => (
-                    <button
-                        key={val}
-                        onClick={() => setAmount(val)}
-                        className="rounded-full bg-secondary px-4 py-2 text-xs font-bold text-foreground transition-colors hover:bg-black hover:text-white"
-                    >
-                        {val}
-                    </button>
+                    <button key={val} onClick={() => setAmount(val)} className="rounded-full bg-secondary px-4 py-2 text-xs font-bold text-foreground transition-colors hover:bg-black hover:text-white">{val}</button>
                 ))}
             </div>
             {errors.amount && <p className="mt-2 text-sm font-bold text-red-500">{errors.amount}</p>}
           </div>
 
-           {/* Recipient */}
            <div className="space-y-2">
             <label className="ml-2 text-sm font-bold text-muted-foreground">Recipient</label>
             <div className="relative rounded-2xl bg-secondary p-1">
-                <input 
-                    value={recipientInput}
-                    onChange={(e) => handleRecipientChange(e.target.value)}
-                    placeholder="0x... or basename.eth"
-                    className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50"
-                />
-                <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50">
-                    <Clipboard className="h-5 w-5 text-primary" />
-                </button>
+                <input value={recipientInput} onChange={(e) => handleRecipientChange(e.target.value)} placeholder="0x... or basename.eth" className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50" />
+                <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50"><Clipboard className="h-5 w-5 text-primary" /></button>
             </div>
-            {resolvedAddress && resolvedAddress !== recipientInput && (
-                <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.slice(0,6)}...{resolvedAddress.slice(-4)}</p>
-            )}
+            {resolvedAddress && resolvedAddress !== recipientInput && <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.slice(0,6)}...{resolvedAddress.slice(-4)}</p>}
             {errors.recipient && <p className="ml-2 text-xs font-bold text-red-500">{errors.recipient}</p>}
           </div>
 
-          {/* Time */}
           <div className="space-y-2">
             <label className="ml-2 text-sm font-bold text-muted-foreground">Unlock Date</label>
             <div className="grid grid-cols-2 gap-3">
-                <input 
-                    type="date" 
-                    value={unlockDate}
-                    onChange={(e) => setUnlockDate(e.target.value)}
-                    className="w-full rounded-2xl bg-secondary p-4 text-sm font-bold outline-none"
-                />
-                <input 
-                    type="time" 
-                    value={unlockTime}
-                    onChange={(e) => setUnlockTime(e.target.value)}
-                    className="w-full rounded-2xl bg-secondary p-4 text-sm font-bold outline-none"
-                />
+                <input type="date" value={unlockDate} onChange={(e) => setUnlockDate(e.target.value)} className="w-full rounded-2xl bg-secondary p-4 text-sm font-bold outline-none" />
+                <input type="time" value={unlockTime} onChange={(e) => setUnlockTime(e.target.value)} className="w-full rounded-2xl bg-secondary p-4 text-sm font-bold outline-none" />
             </div>
             {errors.date && <p className="ml-2 text-xs font-bold text-red-500">{errors.date}</p>}
           </div>
 
-          {/* Message */}
           <div className="space-y-2">
             <div className="flex justify-between px-2">
                  <label className="text-sm font-bold text-muted-foreground">Note</label>
                  <span className="flex items-center gap-1 text-[10px] font-bold text-primary bg-primary/10 px-2 rounded-full">HIDDEN</span>
             </div>
-            <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Write a message for the future..."
-                className="h-24 w-full resize-none rounded-3xl border-none bg-secondary p-5 text-base outline-none focus:ring-2 focus:ring-primary/20"
-            />
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Write a message for the future..." className="h-24 w-full resize-none rounded-3xl border-none bg-secondary p-5 text-base outline-none focus:ring-2 focus:ring-primary/20" />
           </div>
 
-          {/* Anonymous Toggle */}
           <div onClick={() => setIsAnonymous(!isAnonymous)} className="flex cursor-pointer items-center justify-between rounded-2xl border border-border p-4 hover:bg-secondary/50 transition-colors">
             <div className="flex items-center gap-3">
-                <div className={cn("flex h-10 w-10 items-center justify-center rounded-full", isAnonymous ? "bg-black text-white" : "bg-secondary text-muted-foreground")}>
-                    {isAnonymous ? <UserX className="h-5 w-5" /> : <User className="h-5 w-5" />}
-                </div>
-                <div className="flex flex-col">
-                    <span className="text-sm font-bold">Anonymous Gift</span>
-                    <span className="text-xs text-muted-foreground">Hide sender address</span>
-                </div>
+                <div className={cn("flex h-10 w-10 items-center justify-center rounded-full", isAnonymous ? "bg-black text-white" : "bg-secondary text-muted-foreground")}>{isAnonymous ? <UserX className="h-5 w-5" /> : <User className="h-5 w-5" />}</div>
+                <div className="flex flex-col"><span className="text-sm font-bold">Anonymous Gift</span><span className="text-xs text-muted-foreground">Hide sender address</span></div>
             </div>
             <div className={cn("h-6 w-11 rounded-full transition-colors relative", isAnonymous ? "bg-primary" : "bg-muted-foreground/30")}>
                 <span className={cn("absolute top-1 h-4 w-4 rounded-full bg-white transition-all shadow-sm", isAnonymous ? "left-6" : "left-1")} />
             </div>
           </div>
 
-          {/* Action Button */}
-          <Button
-            onClick={handleSubmit}
-            disabled={loadingStep !== "IDLE" || !address || isConnecting}
-            className="w-full h-14 rounded-full text-lg font-black shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-          >
-            {loadingStep === "APPROVING" ? (
-                <span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Approving...</span>
-            ) : loadingStep === "CREATING" ? (
-                <span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Minting Gift...</span>
-            ) : !address ? (
-                "Connect Wallet"
-            ) : (
-                "Create Gift"
-            )}
+          <Button onClick={handleSubmit} disabled={loadingStep !== "IDLE" || !address || isConnecting} className="w-full h-14 rounded-full text-lg font-black shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all">
+            {loadingStep === "APPROVING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Approving...</span>) : loadingStep === "CREATING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Minting Gift...</span>) : !address ? "Connect Wallet" : "Create Gift"}
           </Button>
-
           {errors.submit && <p className="text-center text-sm font-bold text-red-500">{errors.submit}</p>}
-
         </div>
       </main>
-      
       <BottomNav />
+      <GiftModal isOpen={showSuccess} onClose={handleResetForm} type="success" gift={successData || {}} onSendAnother={handleResetForm} />
       
-      <GiftModal
-        isOpen={showSuccess}
-        onClose={handleResetForm} 
-        type="success"
-        gift={successData || {}}
-        onSendAnother={handleResetForm}
-      />
+      {/* Disconnect Modal */}
+      <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
     </div>
   );
+}
+
+function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+                    <AlertCircle className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 text-lg font-bold text-foreground">Disconnect Wallet?</h3>
+                <p className="mb-6 text-sm text-muted-foreground">You will need to reconnect to view your gifts.</p>
+                <div className="grid grid-cols-2 gap-3">
+                    <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">Cancel</Button>
+                    <Button onClick={onConfirm} variant="destructive" className="rounded-xl font-bold bg-red-600 hover:bg-red-700">Disconnect</Button>
+                </div>
+            </motion.div>
+        </div>
+    );
 }

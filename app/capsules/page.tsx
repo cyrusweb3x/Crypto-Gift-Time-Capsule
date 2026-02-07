@@ -9,16 +9,14 @@ import { BottomNav } from "@/components/bottom-nav";
 import { CapsuleCard } from "@/components/capsule-card";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
-import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, PartyPopper } from "lucide-react";
+import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, PartyPopper, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 
-// Constants
 const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const STORAGE_KEY = "yupp_wallet_connected";
 
-// ABI
 const CONTRACT_ABI = [
   "function giftCounter() view returns (uint256)",
   "function getGiftDetails(uint256 _giftId) view returns ((uint256 id, address sender, address recipient, address tokenAddress, uint256 amount, uint256 unlockTime, bool isWithdrawn, bool isCancelled, string message))",
@@ -41,39 +39,6 @@ const shortenAddress = (addr: string) => {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
 
-// Success Modal Component
-function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onClose: () => void; amount: string; token: string }) {
-    if (!isOpen) return null;
-    return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className="relative w-full max-w-sm overflow-hidden rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card"
-        >
-          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
-            <PartyPopper className="h-10 w-10 text-primary animate-bounce" />
-          </div>
-          
-          <h2 className="mb-2 text-2xl font-black text-foreground">Unlocked!</h2>
-          <p className="mb-6 font-medium text-muted-foreground">
-            You just claimed your gift.
-          </p>
-          
-          <div className="mb-8 flex flex-col items-center justify-center rounded-2xl bg-secondary py-6">
-            <span className="text-4xl font-black text-primary">{amount}</span>
-            <span className="text-sm font-bold text-muted-foreground">{token}</span>
-          </div>
-  
-          <Button onClick={onClose} className="h-14 w-full rounded-full text-lg font-bold">
-            Close
-          </Button>
-        </motion.div>
-      </div>
-    );
-  }
-
 export default function CapsulesPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
@@ -85,17 +50,73 @@ export default function CapsulesPage() {
   const [activeTab, setActiveTab] = useState<"sent" | "received">("received");
   const [filter, setFilter] = useState<"all" | "ETH" | "USDC">("all");
   const [copied, setCopied] = useState(false);
-  
   const [mySentCapsules, setMySentCapsules] = useState<any[]>([]);
   const [myReceivedCapsules, setMyReceivedCapsules] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
-  
   const [selectedCapsule, setSelectedCapsule] = useState<any | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
+  const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
   // --- Wallet Connection Logic ---
-  const handleDisconnect = useCallback(() => {
+  
+  // A. Silent Connect
+  const checkConnection = useCallback(async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+        const _provider = new BrowserProvider(window.ethereum);
+        const accounts = await _provider.send("eth_accounts", []);
+        if (accounts.length > 0) {
+            setupWallet(accounts[0], _provider);
+        }
+    } catch (e) { console.error("Silent connect error", e); }
+  }, []);
+
+  // B. Setup Helpers
+  const setupWallet = async (acc: string, _provider: BrowserProvider) => {
+      const _signer = await _provider.getSigner();
+      const network = await _provider.getNetwork();
+      if (network.chainId !== 84532n) {
+          try {
+              await window.ethereum.request({
+                  method: "wallet_switchEthereumChain",
+                  params: [{ chainId: BASE_SEPOLIA_ID }],
+              });
+          } catch (e) { console.error(e); }
+      }
+      setProvider(_provider);
+      setSigner(_signer);
+      setAddress(acc);
+      setIsConnected(true);
+      localStorage.setItem(STORAGE_KEY, "true");
+      
+      const bal = await _provider.getBalance(acc);
+      setEthBalance(Number(formatEther(bal)).toFixed(4));
+      
+      try {
+          const name = await _provider.lookupAddress(acc);
+          if (name) {
+              setBasename(name);
+              const avt = await _provider.getAvatar(name);
+              setAvatar(avt);
+          }
+      } catch (e) {}
+  };
+
+  // C. Manual Connect
+  const handleConnect = useCallback(async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+      const _provider = new BrowserProvider(window.ethereum);
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (accounts[0]) setupWallet(accounts[0], _provider);
+    } catch (error) {
+      console.error("Connection Failed", error);
+    }
+  }, []);
+
+  // D. Disconnect
+  const confirmDisconnect = useCallback(() => {
     setIsConnected(false);
     setAddress("");
     setProvider(null);
@@ -106,69 +127,20 @@ export default function CapsulesPage() {
     setMySentCapsules([]);
     setMyReceivedCapsules([]);
     localStorage.removeItem(STORAGE_KEY);
+    setShowDisconnectAlert(false);
   }, []);
 
-  const handleConnect = useCallback(async () => {
-    if (typeof window === "undefined" || !window.ethereum) return;
-    try {
-      const _provider = new BrowserProvider(window.ethereum);
-      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-      if (!accounts[0]) return;
-
-      const _signer = await _provider.getSigner();
-      const network = await _provider.getNetwork();
-      if (network.chainId !== 84532n) {
-        try {
-          await window.ethereum.request({
-            method: "wallet_switchEthereumChain",
-            params: [{ chainId: BASE_SEPOLIA_ID }],
-          });
-        } catch (e) { console.error(e); }
-      }
-
-      setProvider(_provider);
-      setSigner(_signer);
-      setAddress(accounts[0]);
-      setIsConnected(true);
-      localStorage.setItem(STORAGE_KEY, "true");
-
-      // Fetch Balance
-      const bal = await _provider.getBalance(accounts[0]);
-      setEthBalance(Number(formatEther(bal)).toFixed(4));
-
-      // Resolve ENS/Basename
-      try {
-        const name = await _provider.lookupAddress(accounts[0]);
-        if (name) {
-          setBasename(name);
-          const avt = await _provider.getAvatar(name);
-          setAvatar(avt);
-        }
-      } catch (e) {}
-
-    } catch (error) {
-      console.error("Connection Failed", error);
-      handleDisconnect();
-    }
-  }, [handleDisconnect]);
-
-  // Persist Connection
   useEffect(() => {
-    if (typeof window === "undefined" || !window.ethereum) return;
-    const checkPersisted = async () => {
-      if (localStorage.getItem(STORAGE_KEY) === "true") {
-        const _p = new BrowserProvider(window.ethereum);
-        const accs = await _p.send("eth_accounts", []);
-        if (accs.length > 0) handleConnect();
-      }
-    };
-    checkPersisted();
-    const handleAccChange = (accs: string[]) => accs.length > 0 ? handleConnect() : handleDisconnect();
-    window.ethereum.on("accountsChanged", handleAccChange);
-    return () => { if(window.ethereum) window.ethereum.removeListener("accountsChanged", handleAccChange); };
-  }, [handleConnect, handleDisconnect]);
+    if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
+    if (window.ethereum) {
+        window.ethereum.on("accountsChanged", (accs: string[]) => {
+            if (accs.length === 0) confirmDisconnect();
+            else checkConnection();
+        });
+    }
+  }, [checkConnection, confirmDisconnect]);
 
-  // --- Data Fetching Logic ---
+  // --- Data Fetching Logic (Same as before) ---
   const fetchCapsules = useCallback(async () => {
     if (!provider || !address) return;
     setIsLoadingData(true);
@@ -179,9 +151,6 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // Fetch gifts in reverse order (newest first)
-      const batchSize = 20; 
-      // Note: for production, limit this loop or use indexer. For mini-app, this is fine.
       for (let i = totalGifts; i >= 1; i--) {
         try {
           const gift = await contract.getGiftDetails(i);
@@ -193,12 +162,10 @@ export default function CapsulesPage() {
           if (!isSender && !isRecipient) continue;
 
           const { content, isAnonymous } = parseGiftMessage(gift.message);
-          
           const isEth = gift.tokenAddress === ethers.ZeroAddress;
           const tokenSymbol = isEth ? "ETH" : "USDC";
           const decimals = isEth ? 18 : 6; 
           const formattedAmount = formatUnits(gift.amount, decimals);
-          
           const unlockDate = new Date(Number(gift.unlockTime) * 1000);
           const isUnlocked = new Date() >= unlockDate;
           
@@ -213,24 +180,17 @@ export default function CapsulesPage() {
             isWithdrawn: gift.isWithdrawn,
             isAnonymous: isAnonymous,
             message: content,
-            txHash: "", // Transaction hash not stored in struct, would need logs
+            txHash: "", 
             nftTokenId: gift.id.toString(),
           };
 
-          if (isSender) {
-            sent.push(baseCapsuleData);
-          }
-
+          if (isSender) sent.push(baseCapsuleData);
           if (isRecipient) {
             const receivedData = { ...baseCapsuleData };
-            // Hide message logic for locked gifts
-            if (!isUnlocked) {
-              receivedData.message = "🔒 Message is hidden until unlocked";
-            }
+            if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
             received.push(receivedData);
           }
-          
-        } catch (err) { console.error("Error fetching gift ID:", i, err); }
+        } catch (err) { console.error(err); }
       }
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
@@ -238,7 +198,6 @@ export default function CapsulesPage() {
     finally { setIsLoadingData(false); }
   }, [provider, address]);
 
-  // Auto-fetch when connected
   useEffect(() => {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
@@ -254,19 +213,12 @@ export default function CapsulesPage() {
       
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
-      
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
-      
-      // Refresh data
       fetchCapsules(); 
-      // Update balance
       const bal = await provider?.getBalance(address);
       if(bal) setEthBalance(Number(formatEther(bal)).toFixed(4));
-
-    } catch (error: any) { 
-      alert("Claim failed: " + (error.reason || error.message)); 
-    } 
+    } catch (error: any) { alert("Claim failed: " + (error.reason || error.message)); } 
     finally { setIsClaiming(false); }
   };
 
@@ -279,10 +231,9 @@ export default function CapsulesPage() {
   const sentCapsules = mySentCapsules.filter(c => filter === "all" || c.token === filter);
   const receivedCapsules = myReceivedCapsules.filter(c => filter === "all" || c.token === filter);
 
-
   return (
     <div className="min-h-screen bg-background pb-20 relative font-sans text-foreground">
-      <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={handleDisconnect} />
+      <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={() => setShowDisconnectAlert(true)} />
       <main className="mx-auto max-w-[480px] px-6 py-8">
         {!isConnected ? (
           <NotConnectedState onConnect={handleConnect} />
@@ -304,7 +255,6 @@ export default function CapsulesPage() {
                   </div>
                 </div>
               </div>
-              
               <div className="flex items-center justify-between rounded-2xl bg-background p-4 shadow-sm">
                  <span className="text-sm font-bold text-muted-foreground">Balance</span>
                  <span className="text-xl font-black text-foreground">{ethBalance} ETH</span>
@@ -317,14 +267,14 @@ export default function CapsulesPage() {
               <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
             </div>
 
-            {/* Filter Chips */}
+            {/* Filter Chips - UPDATED COLOR LOGIC */}
             <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
               <FilterChip isActive={filter === "all"} onClick={() => setFilter("all")} label="All" />
               <FilterChip isActive={filter === "ETH"} onClick={() => setFilter("ETH")} label="ETH" />
               <FilterChip isActive={filter === "USDC"} onClick={() => setFilter("USDC")} label="USDC" />
             </div>
 
-            {/* List Header */}
+            {/* List */}
             <div className="flex justify-between items-center mb-4">
                <h3 className="font-bold text-lg">{activeTab === "sent" ? "Sent Gifts" : "Inbox"}</h3>
                <Button variant="ghost" size="icon" onClick={fetchCapsules} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
@@ -338,18 +288,7 @@ export default function CapsulesPage() {
               ) : activeTab === "sent" ? (
                 <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {sentCapsules.length > 0 ? sentCapsules.map((c) => (
-                    <CapsuleCard 
-                      key={c.id} 
-                      type="sent" 
-                      recipient={shortenAddress(c.recipient)} 
-                      amount={c.amount} 
-                      token={c.token} 
-                      unlockDate={c.unlockDate} 
-                      isUnlocked={c.isUnlocked} 
-                      message={c.message} 
-                      txHash={c.txHash} 
-                      isWithdrawn={c.isWithdrawn} 
-                    />
+                    <CapsuleCard key={c.id} type="sent" recipient={shortenAddress(c.recipient)} amount={c.amount} token={c.token} unlockDate={c.unlockDate} isUnlocked={c.isUnlocked} message={c.message} txHash={c.txHash} isWithdrawn={c.isWithdrawn} />
                   )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
                 </motion.div>
               ) : (
@@ -378,7 +317,7 @@ export default function CapsulesPage() {
       </main>
       <BottomNav />
       
-      {/* Detail Modal */}
+      {/* Detail Modal - Passing a class for button in case GiftModal supports it */}
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
@@ -386,11 +325,13 @@ export default function CapsulesPage() {
           type="detail" 
           gift={{ ...selectedCapsule, sender: selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || "") }} 
           onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received') ? handleClaim : undefined} 
-          isClaiming={isClaiming} 
+          isClaiming={isClaiming}
+          // Assuming the GiftModal accepts a custom class for the main action button
+          mainActionClass="bg-blue-600 hover:bg-blue-700 text-white w-full rounded-full h-12 font-bold"
         />
       )}
 
-      {/* Claim Success Modal */}
+      {/* Success Modal */}
       <AnimatePresence>
         {successModalData && (
           <SuccessModal 
@@ -402,11 +343,72 @@ export default function CapsulesPage() {
         )}
       </AnimatePresence>
 
+      {/* Disconnect Modal */}
+      <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
     </div>
   );
 }
 
-// Subcomponents
+// --- Subcomponents ---
+
+// UPDATED: Blue Color for Active State
+function FilterChip({ isActive, onClick, label }: any) {
+    return (
+        <button 
+            onClick={onClick} 
+            className={cn(
+                "rounded-full px-4 py-2 text-xs font-bold transition-colors border", 
+                isActive 
+                  ? "bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-600/20" // Active: BLUE
+                  : "bg-white border-gray-200 text-black hover:bg-gray-100" // Inactive
+            )}
+        >
+            {label}
+        </button>
+    );
+}
+
+function SuccessModal({ isOpen, onClose, amount, token }: { isOpen: boolean; onClose: () => void; amount: string; token: string }) {
+    if (!isOpen) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-sm overflow-hidden rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card">
+          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
+            <PartyPopper className="h-10 w-10 text-blue-600 animate-bounce" />
+          </div>
+          <h2 className="mb-2 text-2xl font-black text-foreground">Unlocked!</h2>
+          <p className="mb-6 font-medium text-muted-foreground">You just claimed your gift.</p>
+          <div className="mb-8 flex flex-col items-center justify-center rounded-2xl bg-secondary py-6">
+            <span className="text-4xl font-black text-blue-600">{amount}</span>
+            <span className="text-sm font-bold text-muted-foreground">{token}</span>
+          </div>
+          <Button onClick={onClose} className="h-14 w-full rounded-full text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white">
+            Close
+          </Button>
+        </motion.div>
+      </div>
+    );
+}
+
+function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+                    <AlertCircle className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 text-lg font-bold text-foreground">Disconnect Wallet?</h3>
+                <p className="mb-6 text-sm text-muted-foreground">You will need to reconnect to view your gifts.</p>
+                <div className="grid grid-cols-2 gap-3">
+                    <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">Cancel</Button>
+                    <Button onClick={onConfirm} variant="destructive" className="rounded-xl font-bold bg-red-600 hover:bg-red-700">Disconnect</Button>
+                </div>
+            </motion.div>
+        </div>
+    );
+}
+
 function NotConnectedState({ onConnect }: { onConnect: () => void }) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
@@ -422,29 +424,7 @@ function NotConnectedState({ onConnect }: { onConnect: () => void }) {
 
 function TabButton({ isActive, onClick, label }: any) {
     return (
-        <button 
-            onClick={onClick} 
-            className={cn(
-                "flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200", 
-                isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-        >
-            {label}
-        </button>
-    );
-}
-
-function FilterChip({ isActive, onClick, label }: any) {
-    return (
-        <button 
-            onClick={onClick} 
-            className={cn(
-                "rounded-full px-4 py-2 text-xs font-bold transition-colors border", 
-                isActive 
-                  ? "bg-black border-black text-white" 
-                  : "bg-white border-gray-200 text-black hover:bg-gray-100" 
-            )}
-        >
+        <button onClick={onClick} className={cn("flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200", isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground")}>
             {label}
         </button>
     );
