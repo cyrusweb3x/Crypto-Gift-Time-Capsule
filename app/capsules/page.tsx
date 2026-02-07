@@ -1,5 +1,3 @@
-// app/capsules/page.tsx
-
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
@@ -59,8 +57,6 @@ export default function CapsulesPage() {
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
   // --- Wallet Connection Logic ---
-  
-  // A. Silent Connect
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -72,7 +68,6 @@ export default function CapsulesPage() {
     } catch (e) { console.error("Silent connect error", e); }
   }, []);
 
-  // B. Setup Helpers
   const setupWallet = async (acc: string, _provider: BrowserProvider) => {
       const _signer = await _provider.getSigner();
       const network = await _provider.getNetwork();
@@ -103,7 +98,6 @@ export default function CapsulesPage() {
       } catch (e) {}
   };
 
-  // C. Manual Connect
   const handleConnect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -115,7 +109,6 @@ export default function CapsulesPage() {
     }
   }, []);
 
-  // D. Disconnect
   const confirmDisconnect = useCallback(() => {
     setIsConnected(false);
     setAddress("");
@@ -140,7 +133,7 @@ export default function CapsulesPage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- Data Fetching Logic (Same as before) ---
+  // --- Optimized Data Fetching Logic (Parallel Requests) ---
   const fetchCapsules = useCallback(async () => {
     if (!provider || !address) return;
     setIsLoadingData(true);
@@ -148,18 +141,29 @@ export default function CapsulesPage() {
       const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
       const counter = await contract.giftCounter();
       const totalGifts = Number(counter);
+      
+      // OPTIMIZATION: Create an array of promises to fetch all gifts in parallel
+      // instead of awaiting one by one in a loop.
+      const promises = [];
+      for (let i = totalGifts; i >= 1; i--) {
+        promises.push(contract.getGiftDetails(i));
+      }
+
+      // Wait for all network requests to finish
+      const rawGifts = await Promise.all(promises);
+
       const sent: any[] = [];
       const received: any[] = [];
 
-      for (let i = totalGifts; i >= 1; i--) {
+      // Process the data locally
+      rawGifts.forEach((gift: any) => {
         try {
-          const gift = await contract.getGiftDetails(i);
           const gSender = gift.sender;
           const gRecipient = gift.recipient;
           const isSender = gSender.toLowerCase() === address.toLowerCase();
           const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
 
-          if (!isSender && !isRecipient) continue;
+          if (!isSender && !isRecipient) return;
 
           const { content, isAnonymous } = parseGiftMessage(gift.message);
           const isEth = gift.tokenAddress === ethers.ZeroAddress;
@@ -190,11 +194,12 @@ export default function CapsulesPage() {
             if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
             received.push(receivedData);
           }
-        } catch (err) { console.error(err); }
-      }
+        } catch (err) { console.error("Error processing gift", err); }
+      });
+
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
-    } catch (error) { console.error(error); } 
+    } catch (error) { console.error("Fetch Error:", error); } 
     finally { setIsLoadingData(false); }
   }, [provider, address]);
 
@@ -215,6 +220,8 @@ export default function CapsulesPage() {
       const claimedToken = selectedCapsule.token;
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
+      
+      // Refresh data after claim
       fetchCapsules(); 
       const bal = await provider?.getBalance(address);
       if(bal) setEthBalance(Number(formatEther(bal)).toFixed(4));
@@ -267,7 +274,7 @@ export default function CapsulesPage() {
               <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
             </div>
 
-            {/* Filter Chips - UPDATED COLOR LOGIC */}
+            {/* Filter Chips */}
             <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
               <FilterChip isActive={filter === "all"} onClick={() => setFilter("all")} label="All" />
               <FilterChip isActive={filter === "ETH"} onClick={() => setFilter("ETH")} label="ETH" />
@@ -317,17 +324,18 @@ export default function CapsulesPage() {
       </main>
       <BottomNav />
       
-      {/* Detail Modal - Passing a class for button in case GiftModal supports it */}
+      {/* Detail Modal */}
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
           onClose={() => !isClaiming && setSelectedCapsule(null)} 
           type="detail" 
-          gift={{ ...selectedCapsule, sender: selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || "") }} 
+          gift={{ 
+            ...selectedCapsule, 
+            sender: selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || "") 
+          }} 
           onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received') ? handleClaim : undefined} 
           isClaiming={isClaiming}
-          // Assuming the GiftModal accepts a custom class for the main action button
-          mainActionClass="bg-blue-600 hover:bg-blue-700 text-white w-full rounded-full h-12 font-bold"
         />
       )}
 
@@ -343,7 +351,6 @@ export default function CapsulesPage() {
         )}
       </AnimatePresence>
 
-      {/* Disconnect Modal */}
       <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
     </div>
   );
@@ -351,7 +358,6 @@ export default function CapsulesPage() {
 
 // --- Subcomponents ---
 
-// UPDATED: Blue Color for Active State
 function FilterChip({ isActive, onClick, label }: any) {
     return (
         <button 
@@ -359,8 +365,8 @@ function FilterChip({ isActive, onClick, label }: any) {
             className={cn(
                 "rounded-full px-4 py-2 text-xs font-bold transition-colors border", 
                 isActive 
-                  ? "bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-600/20" // Active: BLUE
-                  : "bg-white border-gray-200 text-black hover:bg-gray-100" // Inactive
+                  ? "bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-600/20" 
+                  : "bg-white border-gray-200 text-black hover:bg-gray-100" 
             )}
         >
             {label}
