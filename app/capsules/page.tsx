@@ -1,3 +1,5 @@
+// app/capsule/page.tsx
+
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
@@ -142,20 +144,16 @@ export default function CapsulesPage() {
       const counter = await contract.giftCounter();
       const totalGifts = Number(counter);
       
-      // OPTIMIZATION: Create an array of promises to fetch all gifts in parallel
-      // instead of awaiting one by one in a loop.
       const promises = [];
       for (let i = totalGifts; i >= 1; i--) {
         promises.push(contract.getGiftDetails(i));
       }
 
-      // Wait for all network requests to finish
       const rawGifts = await Promise.all(promises);
 
       const sent: any[] = [];
       const received: any[] = [];
 
-      // Process the data locally
       rawGifts.forEach((gift: any) => {
         try {
           const gSender = gift.sender;
@@ -184,6 +182,7 @@ export default function CapsulesPage() {
             isWithdrawn: gift.isWithdrawn,
             isAnonymous: isAnonymous,
             message: content,
+            realMessage: content, // Storing real message for auto-unlock
             txHash: "", 
             nftTokenId: gift.id.toString(),
           };
@@ -206,6 +205,42 @@ export default function CapsulesPage() {
   useEffect(() => {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
+
+  // --- Auto Unlock Timer Logic ---
+  useEffect(() => {
+    const timers: NodeJS.Timeout[] = [];
+
+    myReceivedCapsules.forEach((capsule) => {
+      if (!capsule.isUnlocked && !capsule.isWithdrawn && capsule.unlockDate) {
+        const now = Date.now();
+        const unlockTime = new Date(capsule.unlockDate).getTime();
+        const timeUntilUnlock = unlockTime - now;
+
+        // If unlock is within next 24 hours
+        if (timeUntilUnlock > 0 && timeUntilUnlock < 86400000) {
+          const timerId = setTimeout(() => {
+            setMyReceivedCapsules((currentCapsules) =>
+              currentCapsules.map((c) => {
+                if (c.id === capsule.id) {
+                  return {
+                    ...c,
+                    isUnlocked: true,
+                    message: c.realMessage || c.message,
+                  };
+                }
+                return c;
+              })
+            );
+          }, timeUntilUnlock + 1000); // Add 1s buffer
+
+          timers.push(timerId);
+        }
+      }
+    });
+
+    return () => timers.forEach(clearTimeout);
+  }, [myReceivedCapsules]);
+
 
   // --- Claim Logic ---
   const handleClaim = async () => {
@@ -422,7 +457,7 @@ function NotConnectedState({ onConnect }: { onConnect: () => void }) {
             <Wallet className="h-10 w-10 text-primary" />
         </div>
         <h2 className="text-2xl font-black mb-2">Connect Wallet</h2>
-        <p className="text-muted-foreground mb-8 max-w-[200px]">Connect to Base Sepolia to view your gifts.</p>
+        <p className="text-muted-foreground mb-8 max-w-[200px]">Connect Wallet to view your gifts.</p>
         <Button onClick={onConnect} className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none">Connect</Button>
       </div>
     );
