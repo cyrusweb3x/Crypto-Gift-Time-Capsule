@@ -1,4 +1,4 @@
-// app/capsule/page.tsx
+// app/capsules/page.tsx  (বা app/capsule/page.tsx)
 
 "use client";
 
@@ -55,6 +55,7 @@ export default function CapsulesPage() {
   const [mySentCapsules, setMySentCapsules] = useState<any[]>([]);
   const [myReceivedCapsules, setMyReceivedCapsules] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [selectedCapsule, setSelectedCapsule] = useState<any | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
@@ -71,15 +72,6 @@ export default function CapsulesPage() {
           setUsdcBalance(Number(formatUnits(usdcBal, 6)).toFixed(2));
       } catch (e) { console.error("Balance fetch error", e); }
   };
-
-  const checkConnection = useCallback(async () => {
-    if (typeof window === "undefined" || !window.ethereum) return;
-    try {
-        const _provider = new BrowserProvider(window.ethereum);
-        const accounts = await _provider.send("eth_accounts", []);
-        if (accounts.length > 0) setupWallet(accounts[0], _provider);
-    } catch (e) { console.error("Silent connect error", e); }
-  }, []);
 
   const setupWallet = async (acc: string, _provider: BrowserProvider) => {
       const _signer = await _provider.getSigner();
@@ -110,6 +102,15 @@ export default function CapsulesPage() {
           }
       } catch (e) {}
   };
+
+  const checkConnection = useCallback(async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+        const _provider = new BrowserProvider(window.ethereum);
+        const accounts = await _provider.send("eth_accounts", []);
+        if (accounts.length > 0) setupWallet(accounts[0], _provider);
+    } catch (e) { console.error("Silent connect error", e); }
+  }, []);
 
   const handleConnect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
@@ -145,24 +146,37 @@ export default function CapsulesPage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- Optimized Data Fetching Logic ---
-  const fetchCapsules = useCallback(async () => {
+  // --- Optimized Data Fetching Logic (Fixed RPC Limits) ---
+  const fetchCapsules = useCallback(async (isSilent = false) => {
     if (!provider || !address) return;
-    setIsLoadingData(true);
+    
+    if (!isSilent) setIsLoadingData(true);
+    else setIsBackgroundLoading(true);
+
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, provider);
-      
       const sent: any[] = [];
       const received: any[] = [];
+
+      // Helper: Batch API Calling to avoid RPC limits
+      const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
+          const results = [];
+          for (let i = total; i >= 1; i -= batchSize) {
+              const batch = [];
+              for (let j = 0; j < batchSize && (i - j) >= 1; j++) {
+                  batch.push(fetchFn(i - j).catch(() => null));
+              }
+              results.push(...(await Promise.all(batch)));
+          }
+          return results;
+      };
 
       // ==========================================
       // 1. Fetch Normal Gifts
       // ==========================================
       try {
           const totalGifts = Number(await contract.giftCounter());
-          const promises = [];
-          for (let i = totalGifts; i >= 1; i--) promises.push(contract.getGiftDetails(i).catch(() => null));
-          const rawGifts = await Promise.all(promises);
+          const rawGifts = await fetchInBatches(totalGifts, (id) => contract.getGiftDetails(id));
 
           rawGifts.forEach((gift: any) => {
             if (!gift) return;
@@ -192,74 +206,63 @@ export default function CapsulesPage() {
               const unlockDate = new Date(Number(gUnlockTime) * 1000);
               const isUnlocked = new Date() >= unlockDate;
               
-              const baseCapsuleData = {
-                id: gId,
-                sender: gSender,
-                recipient: gRecipient,
-                amount: formattedAmount,
-                token: tokenSymbol,
-                unlockDate: unlockDate,
-                isUnlocked: isUnlocked,
-                isWithdrawn: gIsWithdrawn,
-                isAnonymous: isAnonymous || gIsAnonymous,
-                message: content,
-                realMessage: content, 
-                txHash: "", 
-                isRedPacket: false
+              const baseData = {
+                id: gId, sender: gSender, recipient: gRecipient, amount: formattedAmount,
+                token: tokenSymbol, unlockDate: unlockDate, isUnlocked: isUnlocked,
+                isWithdrawn: gIsWithdrawn, isAnonymous: isAnonymous || gIsAnonymous,
+                message: content, realMessage: content, txHash: "", isRedPacket: false
               };
 
-              if (isSender) sent.push(baseCapsuleData);
+              if (isSender) sent.push(baseData);
               if (isRecipient) {
-                const receivedData = { ...baseCapsuleData };
-                if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
-                received.push(receivedData);
+                const recData = { ...baseData };
+                if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
+                received.push(recData);
               }
-            } catch (err) { console.error("Gift parse error", err); }
+            } catch (err) { }
           });
-      } catch (err) { console.error("Error fetching regular gifts", err); }
+      } catch (err) { }
 
       // ==========================================
-      // 2. Fetch Red Packets (Fully Fixed Tracking)
+      // 2. Fetch Red Packets (100% Fixed Tracker)
       // ==========================================
       try {
           const totalRPs = Number(await contract.redPacketCounter());
           
-          // Phase A: Fetch Global Logs (Safely without failing on block limits)
-          const myClaims: { [key: string]: bigint } = {};
+          // Get fast claim history logs safely
+          const myClaims: { [key: string]: string } = {};
           try {
-              // Get logs from block 0, filtering by specific user address index
+              const currentBlock = await provider.getBlockNumber();
+              const fromBlock = Math.max(0, currentBlock - 45000); 
               const claimFilter = contract.filters.RedPacketClaimed(null, address);
-              const rawLogs = await contract.queryFilter(claimFilter, 0, "latest");
+              const rawLogs = await contract.queryFilter(claimFilter, fromBlock, "latest");
               
-              rawLogs.forEach(_log => {
-                  const log = _log as any; 
-                  if (log.args) {
-                      const pId = log.args[0].toString();
-                      const val = log.args[2]; 
-                      myClaims[pId] = val; 
+              rawLogs.forEach((_log: any) => {
+                  if (_log.args) {
+                      const pId = _log.args[0].toString();
+                      const val = _log.args[2]; 
+                      myClaims[pId] = val.toString(); 
                   }
               });
-          } catch(e) { console.warn("Global RPC filter warning, using fallback verification..."); }
+          } catch(e) {} // Fallback inside the loop if this fails
 
-          // Phase B: Process Each Packet
-          const rpPromises = [];
-          for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
-          const rawRPs = await Promise.all(rpPromises);
+          // Fetch Packets via Safe Batches
+          const rawRPs = await fetchInBatches(totalRPs, (id) => contract.getRedPacketDetails(id));
 
-          for (let rp of rawRPs) {
+          for (const rp of rawRPs) {
               if (!rp) continue;
               try {
-                  const rpId = (rp.id ?? rp[0]).toString();
-                  const rpSender = (rp.sender ?? rp[1]).toString();
-                  const rpTokenAddress = (rp.tokenAddress ?? rp[2]).toString();
-                  const rpTotalAmount = rp.totalAmount ?? rp[3];
-                  const rpRemainingAmount = rp.remainingAmount ?? rp[4];
-                  const rpTotalClaimers = Number(rp.totalClaimers ?? rp[5]);
-                  const rpRemainingClaimers = Number(rp.remainingClaimers ?? rp[6]);
-                  const rpUnlockTime = rp.unlockTime ?? rp[7];
-                  const rpIsAnonymous = rp.isAnonymous ?? rp[9];
-                  const rpIsCancelled = rp.isCancelled ?? rp[10];
-                  const rpMessage = rp.message ?? rp[11] ?? "";
+                  const rpId = rp[0].toString();
+                  const rpSender = rp[1].toString();
+                  const rpTokenAddress = rp[2].toString();
+                  const rpTotalAmount = rp[3];
+                  const rpRemainingAmount = rp[4];
+                  const rpTotalClaimers = Number(rp[5]);
+                  const rpRemainingClaimers = Number(rp[6]);
+                  const rpUnlockTime = rp[7];
+                  const rpIsAnonymous = rp[9];
+                  const rpIsCancelled = rp[10];
+                  const rpMessage = rp[11] || "";
 
                   if (!rpSender || rpSender === ethers.ZeroAddress) continue;
 
@@ -271,14 +274,13 @@ export default function CapsulesPage() {
                   const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
                   const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
 
-                  // === Add To Sent Tab ===
+                  // --- Sent Tab (Created Red Packets) ---
                   if (rpSender.toLowerCase() === address.toLowerCase()) {
-                      const formattedAmount = formatUnits(rpTotalAmount, decimals);
                       sent.push({
                           id: `rp-${rpId}`,
                           sender: rpSender,
                           recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
-                          amount: formattedAmount,
+                          amount: formatUnits(rpTotalAmount, decimals),
                           token: tokenSymbol,
                           unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
                           isUnlocked: true,
@@ -291,38 +293,35 @@ export default function CapsulesPage() {
                       });
                   }
 
-                  // === Add To Received Tab ===
-                  let hasClaimed = !!myClaims[rpId];
-                  let exactAmountBigInt = myClaims[rpId];
+                  // --- Received Tab (Claimed Red Packets) ---
+                  let hasClaimed = false;
+                  let exactAmountStr = "";
 
-                  // Fallback Check if RPC log limit missed this packet
-                  if (!hasClaimed) {
+                  if (myClaims[rpId]) {
+                      hasClaimed = true;
+                      exactAmountStr = formatUnits(myClaims[rpId], decimals);
+                  } else {
+                      // Accurate Fallback for Older Claims
                       try {
                           const userClaimed = await contract.hasClaimedRedPacket(rpId, address);
                           if (userClaimed) {
                               hasClaimed = true;
-                              // Fetch only specific log to avoid RPC limits
-                              const singleFilter = contract.filters.RedPacketClaimed(BigInt(rpId), address);
-                              const singleLog = await contract.queryFilter(singleFilter, 0, "latest");
-                              if (singleLog.length > 0) {
-                                  exactAmountBigInt = (singleLog[0] as any).args[2];
-                              }
+                              exactAmountStr = "Claimed ✓"; 
                           }
                       } catch (e) {}
                   }
 
                   if (hasClaimed) {
-                      let displayAmountStr = "Claimed";
-                      if (exactAmountBigInt) {
-                          const formattedRaw = formatUnits(exactAmountBigInt, decimals);
-                          displayAmountStr = parseFloat(formattedRaw).toFixed(4).replace(/\.?0+$/, '');
+                      let displayAmt = exactAmountStr;
+                      if (exactAmountStr !== "Claimed ✓" && exactAmountStr !== "") {
+                          displayAmt = parseFloat(exactAmountStr).toFixed(4).replace(/\.?0+$/, '');
                       }
-                      
+
                       received.push({
                           id: `rp-claim-${rpId}`,
                           sender: rpSender,
                           recipient: address,
-                          amount: displayAmountStr,
+                          amount: displayAmt || "Claimed ✓",
                           token: tokenSymbol,
                           unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
                           isUnlocked: true,
@@ -334,15 +333,34 @@ export default function CapsulesPage() {
                           isRedPacket: true
                       });
                   }
-              } catch (err) { console.error("Error processing red packet element", err); }
+
+              } catch (err) { console.error("Red packet loop processing error", err); }
           }
-      } catch (err) { console.warn("Red packet error", err); }
+      } catch (err) { console.warn("Red packet overall error", err); }
 
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
+
+      // Refresh balances quietly
+      fetchBalances(address, provider);
+      
     } catch (error) { console.error("Fetch Error:", error); } 
-    finally { setIsLoadingData(false); }
+    finally { 
+        setIsLoadingData(false); 
+        setIsBackgroundLoading(false);
+    }
   }, [provider, address]);
+
+  // --- Auto Reload System (Refreshes data every 10 seconds) ---
+  useEffect(() => {
+    if (provider && address) {
+        fetchCapsules(); // Initial load
+        const interval = setInterval(() => {
+            fetchCapsules(true); // Silent Auto Reload
+        }, 10000);
+        return () => clearInterval(interval);
+    }
+  }, [provider, address, fetchCapsules]);
 
   // --- Auto Unlock Timer ---
   useEffect(() => {
@@ -383,9 +401,7 @@ export default function CapsulesPage() {
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
       
-      if (provider && address) await fetchBalances(address, provider);
-      setTimeout(() => fetchCapsules(), 3000);
-
+      fetchCapsules(true);
     } catch (error: any) { alert("Claim failed: " + (error.reason || error.message)); } 
     finally { setIsClaiming(false); }
   };
@@ -452,10 +468,13 @@ export default function CapsulesPage() {
               <FilterChip isActive={filter === "USDC"} onClick={() => setFilter("USDC")} label="USDC" />
             </div>
 
-            {/* List */}
+            {/* List Header */}
             <div className="flex justify-between items-center mb-4">
-               <h3 className="font-bold text-lg">{activeTab === "sent" ? "Sent Gifts" : "Inbox"}</h3>
-               <Button variant="ghost" size="icon" onClick={fetchCapsules} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
+               <h3 className="font-bold text-lg flex items-center gap-2">
+                   {activeTab === "sent" ? "Sent Gifts" : "Inbox"}
+                   {isBackgroundLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+               </h3>
+               <Button variant="ghost" size="icon" onClick={() => fetchCapsules(false)} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
                   <RefreshCw className={cn("h-4 w-4", isLoadingData && "animate-spin")} />
                 </Button>
             </div>
