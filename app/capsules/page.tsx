@@ -12,16 +12,11 @@ import { Button } from "@/components/ui/button";
 import { Wallet, Copy, Check, Gift, Inbox, Loader2, RefreshCw, User, PartyPopper, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
+import contractAbi from "@/contractAbi.json";
 
-const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
+const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const STORAGE_KEY = "yupp_wallet_connected";
-
-const CONTRACT_ABI = [
-  "function giftCounter() view returns (uint256)",
-  "function getGiftDetails(uint256 _giftId) view returns ((uint256 id, address sender, address recipient, address tokenAddress, uint256 amount, uint256 unlockTime, bool isWithdrawn, bool isCancelled, string message))",
-  "function withdrawGift(uint256 _giftId)"
-];
 
 // Helpers
 const parseGiftMessage = (rawMsg: string) => {
@@ -36,6 +31,8 @@ const parseGiftMessage = (rawMsg: string) => {
   
 const shortenAddress = (addr: string) => {
   if (!addr || addr.length < 10) return addr;
+  // If it's a generic text like "Red Packet", don't shorten it
+  if (!addr.startsWith("0x")) return addr; 
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
 
@@ -135,66 +132,134 @@ export default function CapsulesPage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- Optimized Data Fetching Logic (Parallel Requests) ---
+  // --- Optimized Data Fetching Logic (Gifts + Red Packets) ---
   const fetchCapsules = useCallback(async () => {
     if (!provider || !address) return;
     setIsLoadingData(true);
     try {
-      const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
-      const counter = await contract.giftCounter();
-      const totalGifts = Number(counter);
+      const contract = new Contract(CONTRACT_ADDRESS, contractAbi, provider);
       
-      const promises = [];
-      for (let i = totalGifts; i >= 1; i--) {
-        promises.push(contract.getGiftDetails(i));
-      }
-
-      const rawGifts = await Promise.all(promises);
-
       const sent: any[] = [];
       const received: any[] = [];
 
-      rawGifts.forEach((gift: any) => {
-        try {
-          const gSender = gift.sender;
-          const gRecipient = gift.recipient;
-          const isSender = gSender.toLowerCase() === address.toLowerCase();
-          const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
-
-          if (!isSender && !isRecipient) return;
-
-          const { content, isAnonymous } = parseGiftMessage(gift.message);
-          const isEth = gift.tokenAddress === ethers.ZeroAddress;
-          const tokenSymbol = isEth ? "ETH" : "USDC";
-          const decimals = isEth ? 18 : 6; 
-          const formattedAmount = formatUnits(gift.amount, decimals);
-          const unlockDate = new Date(Number(gift.unlockTime) * 1000);
-          const isUnlocked = new Date() >= unlockDate;
+      // ==========================================
+      // 1. Fetch Normal Gifts
+      // ==========================================
+      try {
+          const counter = await contract.giftCounter();
+          const totalGifts = Number(counter);
+          const promises = [];
+          for (let i = totalGifts; i >= 1; i--) promises.push(contract.getGiftDetails(i).catch(() => null));
           
-          const baseCapsuleData = {
-            id: gift.id.toString(),
-            sender: gSender,
-            recipient: gRecipient,
-            amount: formattedAmount,
-            token: tokenSymbol,
-            unlockDate: unlockDate,
-            isUnlocked: isUnlocked,
-            isWithdrawn: gift.isWithdrawn,
-            isAnonymous: isAnonymous,
-            message: content,
-            realMessage: content, // Storing real message for auto-unlock
-            txHash: "", 
-            nftTokenId: gift.id.toString(),
-          };
+          const rawGifts = await Promise.all(promises);
 
-          if (isSender) sent.push(baseCapsuleData);
-          if (isRecipient) {
-            const receivedData = { ...baseCapsuleData };
-            if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
-            received.push(receivedData);
+          rawGifts.forEach((gift: any) => {
+            if (!gift) return;
+            try {
+              const gId = gift.id || gift[0];
+              // FIX: Added 'creator' and 'from' fallback to correctly identify USDC sent via Relayer/Proxy
+              const gSender = (gift.creator || gift.from || gift.sender || gift[1] || "").toString();
+              const gRecipient = (gift.recipient || gift.to || gift[2] || "").toString();
+              const gTokenAddress = gift.tokenAddress || gift[3];
+              const gAmount = gift.amount || gift[4];
+              const gUnlockTime = gift.unlockTime || gift[5];
+              const gIsWithdrawn = gift.isWithdrawn ?? gift[6];
+              const gMessage = gift.message || gift[8] || "";
+
+              if (!gSender || !gRecipient) return;
+
+              const isSender = gSender.toLowerCase() === address.toLowerCase();
+              const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
+
+              if (!isSender && !isRecipient) return;
+
+              const { content, isAnonymous } = parseGiftMessage(gMessage);
+              const isEth = gTokenAddress === ethers.ZeroAddress;
+              const tokenSymbol = isEth ? "ETH" : "USDC";
+              const decimals = isEth ? 18 : 6; 
+              const formattedAmount = formatUnits(gAmount, decimals);
+              const unlockDate = new Date(Number(gUnlockTime) * 1000);
+              const isUnlocked = new Date() >= unlockDate;
+              
+              const baseCapsuleData = {
+                id: gId.toString(),
+                sender: gSender,
+                recipient: gRecipient,
+                amount: formattedAmount,
+                token: tokenSymbol,
+                unlockDate: unlockDate,
+                isUnlocked: isUnlocked,
+                isWithdrawn: gIsWithdrawn,
+                isAnonymous: isAnonymous,
+                message: content,
+                realMessage: content, 
+                txHash: "", 
+                nftTokenId: gId.toString(),
+                isRedPacket: false
+              };
+
+              if (isSender) sent.push(baseCapsuleData);
+              if (isRecipient) {
+                const receivedData = { ...baseCapsuleData };
+                if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
+                received.push(receivedData);
+              }
+            } catch (err) { console.error("Error processing regular gift", err); }
+          });
+      } catch (err) { console.error("Error fetching regular gifts", err); }
+
+      // ==========================================
+      // 2. Fetch Red Packets (Sent Data)
+      // ==========================================
+      try {
+          if (contract.redPacketCounter && contract.getRedPacketDetails) {
+              const rpCounter = await contract.redPacketCounter();
+              const totalRPs = Number(rpCounter);
+              const rpPromises = [];
+              for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
+              
+              const rawRPs = await Promise.all(rpPromises);
+
+              rawRPs.forEach((rp: any) => {
+                  if (!rp) return;
+                  try {
+                      const rpId = rp.id || rp[0];
+                      const rpSender = (rp.creator || rp.sender || rp[1] || "").toString();
+                      const rpTokenAddress = rp.tokenAddress || rp[2] || ethers.ZeroAddress;
+                      const rpAmount = rp.totalAmount || rp.amount || rp[3]; 
+                      const rpMessage = rp.message || rp[6] || "";
+
+                      if (!rpSender) return;
+
+                      const isSender = rpSender.toLowerCase() === address.toLowerCase();
+
+                      if (isSender) {
+                          const { content, isAnonymous } = parseGiftMessage(rpMessage);
+                          const isEth = rpTokenAddress === ethers.ZeroAddress;
+                          const tokenSymbol = isEth ? "ETH" : "USDC";
+                          const decimals = isEth ? 18 : 6; 
+                          const formattedAmount = rpAmount ? formatUnits(rpAmount, decimals) : "0";
+                          
+                          sent.push({
+                              id: `rp-${rpId.toString()}`,
+                              sender: rpSender,
+                              recipient: "Red Packet (Multiple)",
+                              amount: formattedAmount,
+                              token: tokenSymbol,
+                              unlockDate: new Date(),
+                              isUnlocked: true,
+                              isWithdrawn: false, 
+                              isAnonymous: isAnonymous,
+                              message: content,
+                              realMessage: content,
+                              txHash: "",
+                              isRedPacket: true
+                          });
+                      }
+                  } catch (err) { console.error("Error processing red packet", err); }
+              });
           }
-        } catch (err) { console.error("Error processing gift", err); }
-      });
+      } catch (err) { console.warn("Red packet functions might not exist or differ in ABI names.", err); }
 
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
@@ -206,68 +271,102 @@ export default function CapsulesPage() {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
 
-  // --- Auto Unlock Timer Logic ---
+  // --- Auto Unlock Timer Logic (Updated for both Received & Sent) ---
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
 
-    myReceivedCapsules.forEach((capsule) => {
-      if (!capsule.isUnlocked && !capsule.isWithdrawn && capsule.unlockDate) {
-        const now = Date.now();
-        const unlockTime = new Date(capsule.unlockDate).getTime();
-        const timeUntilUnlock = unlockTime - now;
+    const setupTimers = (capsules: any[], setCapsules: any) => {
+      capsules.forEach((capsule) => {
+        if (!capsule.isUnlocked && !capsule.isWithdrawn && capsule.unlockDate) {
+          const now = Date.now();
+          const unlockTime = new Date(capsule.unlockDate).getTime();
+          const timeUntilUnlock = unlockTime - now;
 
-        // If unlock is within next 24 hours
-        if (timeUntilUnlock > 0 && timeUntilUnlock < 86400000) {
-          const timerId = setTimeout(() => {
-            setMyReceivedCapsules((currentCapsules) =>
-              currentCapsules.map((c) => {
-                if (c.id === capsule.id) {
-                  return {
-                    ...c,
-                    isUnlocked: true,
-                    message: c.realMessage || c.message,
-                  };
-                }
-                return c;
-              })
-            );
-          }, timeUntilUnlock + 1000); // Add 1s buffer
+          if (timeUntilUnlock > 0 && timeUntilUnlock < 86400000) {
+            const timerId = setTimeout(() => {
+              setCapsules((currentCapsules: any[]) =>
+                currentCapsules.map((c) => {
+                  if (c.id === capsule.id) {
+                    return {
+                      ...c,
+                      isUnlocked: true,
+                      message: c.realMessage || c.message,
+                    };
+                  }
+                  return c;
+                })
+              );
+            }, timeUntilUnlock + 1000); 
 
-          timers.push(timerId);
+            timers.push(timerId);
+          }
         }
-      }
-    });
+      });
+    };
+
+    setupTimers(myReceivedCapsules, setMyReceivedCapsules);
+    setupTimers(mySentCapsules, setMySentCapsules);
 
     return () => timers.forEach(clearTimeout);
-  }, [myReceivedCapsules]);
+  }, [myReceivedCapsules, mySentCapsules]);
 
-
-  // --- Claim Logic ---
+  // --- Claim Logic (Updated for Instant UI Update) ---
   const handleClaim = async () => {
     if (!selectedCapsule || !signer) return;
     setIsClaiming(true);
     try {
-      const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
       const tx = await contract.withdrawGift(selectedCapsule.id);
       await tx.wait();
       
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
+      
+      // 1. Optimistic Update: সাথে সাথেই UI থেকে Claim বাটন সরিয়ে Claimed দেখানোর জন্য
+      setMyReceivedCapsules((prev) => 
+        prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c)
+      );
+
+      // 2. মডাল বন্ধ করে সাকসেস মেসেজ দেখানো
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
       
-      // Refresh data after claim
-      fetchCapsules(); 
+      // 3. ব্যালেন্স ইনস্ট্যান্ট আপডেট করা
       const bal = await provider?.getBalance(address);
       if(bal) setEthBalance(Number(formatEther(bal)).toFixed(4));
+
+      // 4. ৩ সেকেন্ড পর ব্যাকগ্রাউন্ডে ডেটা রিফ্রেশ করা (যাতে ব্লকচেইন নোড সিঙ্ক হওয়ার সময় পায়)
+      setTimeout(() => {
+          fetchCapsules();
+      }, 3000);
+
     } catch (error: any) { alert("Claim failed: " + (error.reason || error.message)); } 
     finally { setIsClaiming(false); }
   };
 
-  const handleCopyAddress = () => {
-    navigator.clipboard.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyAddress = async () => {
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      const textArea = document.createElement("textarea");
+      textArea.value = address;
+      textArea.style.position = "fixed"; 
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand("copy");
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (e) {
+        console.error("Fallback copy failed", e);
+      }
+      document.body.removeChild(textArea);
+    }
   };
 
   const sentCapsules = mySentCapsules.filter(c => filter === "all" || c.token === filter);
@@ -330,7 +429,18 @@ export default function CapsulesPage() {
               ) : activeTab === "sent" ? (
                 <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {sentCapsules.length > 0 ? sentCapsules.map((c) => (
-                    <CapsuleCard key={c.id} type="sent" recipient={shortenAddress(c.recipient)} amount={c.amount} token={c.token} unlockDate={c.unlockDate} isUnlocked={c.isUnlocked} message={c.message} txHash={c.txHash} isWithdrawn={c.isWithdrawn} />
+                    <CapsuleCard 
+                      key={c.id} 
+                      type="sent" 
+                      recipient={c.isRedPacket ? "Red Packet" : shortenAddress(c.recipient)} 
+                      amount={c.amount} 
+                      token={c.token} 
+                      unlockDate={c.unlockDate} 
+                      isUnlocked={c.isUnlocked} 
+                      message={c.message} 
+                      txHash={c.txHash} 
+                      isWithdrawn={c.isWithdrawn} 
+                    />
                   )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
                 </motion.div>
               ) : (

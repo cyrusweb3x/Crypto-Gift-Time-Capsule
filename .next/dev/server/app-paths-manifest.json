@@ -1,0 +1,5 @@
+{
+  "/capsules/page": "app/capsules/page.js",
+  "/create/page": "app/create/page.js",
+  "/page": "app/page.js"
+}

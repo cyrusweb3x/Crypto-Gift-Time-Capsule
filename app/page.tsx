@@ -6,30 +6,27 @@ import React, { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
-import { TrustSection } from "@/components/trust-section"; // নতুন সেকশন ইমপোর্ট
-import { Lock, Diamond, Shield, Gift, ArrowRight, AlertCircle } from "lucide-react";
-import { ethers, BrowserProvider, Contract, formatEther, JsonRpcProvider } from "ethers";
+import { TrustSection } from "@/components/trust-section"; 
+import { Lock, Diamond, Shield, Gift, ArrowRight, AlertCircle, Users } from "lucide-react";
+import { ethers, BrowserProvider, Contract, formatEther, formatUnits, JsonRpcProvider } from "ethers";
 import { Button } from "@/components/ui/button";
+import contractAbi from "@/contractAbi.json";
 
 // Contract Configuration
-const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
+const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const PUBLIC_RPC = "https://sepolia.base.org"; 
-
-const CONTRACT_ABI = [
-  "function giftCounter() view returns (uint256)",
-  "function getGiftDetails(uint256 _giftId) view returns ((uint256 id, address sender, address recipient, address tokenAddress, uint256 amount, uint256 unlockTime, bool isWithdrawn, bool isCancelled, string message))"
-];
 
 export default function HomePage() {
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
+  // Updated state for USDC instead of Users
   const [stats, setStats] = useState({
     giftsSent: "...",
-    valueLocked: "...",
-    activeUsers: "...",
+    ethLocked: "...",
+    usdcLocked: "...",
   });
 
   // --- 1. Wallet Logic ---
@@ -100,35 +97,75 @@ export default function HomePage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- 2. Stats Logic ---
+  // --- 2. Stats Logic (Updated for ETH, USDC & Red Packets) ---
   useEffect(() => {
     const fetchStats = async () => {
       try {
         const provider = new JsonRpcProvider(PUBLIC_RPC);
-        const contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
-        const counter = await contract.giftCounter();
-        const totalGifts = Number(counter);
-        let totalEthValue = 0;
-        const uniqueUsers = new Set();
+        const contract = new Contract(CONTRACT_ADDRESS, contractAbi, provider);
         
-        const promises = [];
-        for (let i = 1; i <= totalGifts; i++) promises.push(contract.getGiftDetails(i));
-        const results = await Promise.all(promises);
+        let totalGiftsCount = 0;
+        let totalEthValue = 0;
+        let totalUsdcValue = 0;
 
-        results.forEach((gift) => {
-          uniqueUsers.add(gift.sender);
-          uniqueUsers.add(gift.recipient);
-          if (gift.tokenAddress === ethers.ZeroAddress) {
-            totalEthValue += parseFloat(formatEther(gift.amount));
-          }
-        });
+        // 1. Fetch Normal Gifts
+        if (contract.giftCounter && contract.getGiftDetails) {
+            const counter = await contract.giftCounter();
+            totalGiftsCount += Number(counter);
+            
+            const promises = [];
+            for (let i = 1; i <= Number(counter); i++) {
+                promises.push(contract.getGiftDetails(i).catch(() => null));
+            }
+            const results = await Promise.all(promises);
+
+            results.forEach((gift) => {
+                if (!gift) return;
+                const tokenAddr = gift.tokenAddress || gift[3];
+                const amount = gift.amount || gift[4];
+                
+                if (tokenAddr === ethers.ZeroAddress) {
+                    totalEthValue += parseFloat(formatEther(amount));
+                } else {
+                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); // Assuming USDC has 6 decimals
+                }
+            });
+        }
+
+        // 2. Fetch Red Packets Data
+        if (contract.redPacketCounter && contract.getRedPacketDetails) {
+            const rpCounter = await contract.redPacketCounter();
+            totalGiftsCount += Number(rpCounter);
+            
+            const rpPromises = [];
+            for (let i = 1; i <= Number(rpCounter); i++) {
+                rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
+            }
+            const rpResults = await Promise.all(rpPromises);
+
+            rpResults.forEach((rp) => {
+                if (!rp) return;
+                const tokenAddr = rp.tokenAddress || rp[2] || ethers.ZeroAddress;
+                const amount = rp.totalAmount || rp.amount || rp[3];
+                
+                if (tokenAddr === ethers.ZeroAddress) {
+                    totalEthValue += parseFloat(formatEther(amount));
+                } else {
+                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); // Assuming USDC has 6 decimals
+                }
+            });
+        }
 
         setStats({
-          giftsSent: totalGifts.toString(),
-          valueLocked: `${totalEthValue.toFixed(4)} ETH`,
-          activeUsers: uniqueUsers.size.toString(),
+          giftsSent: totalGiftsCount.toString(),
+          ethLocked: `${totalEthValue.toFixed(4)}`,
+          usdcLocked: `${totalUsdcValue.toFixed(2)}`,
         });
-      } catch (error) { console.error("Stats error:", error); }
+
+      } catch (error) { 
+          console.error("Stats error:", error); 
+          setStats({ giftsSent: "0", ethLocked: "0.00", usdcLocked: "0.00" });
+      }
     };
     fetchStats();
   }, []);
@@ -156,31 +193,33 @@ export default function HomePage() {
             Gift Time <br/> <span className="text-primary">Capsule</span>
           </motion.h1>
           <motion.p initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="max-w-xs text-lg font-medium text-muted-foreground">
-            Send crypto gifts that unlock in the future. Secured on Base.
+            Send time-locked crypto gifts & Red Packets that unlock in the future.
           </motion.p>
         </section>
 
         {/* Stats */}
         <section className="mb-12 grid grid-cols-3 gap-2">
-            <StatCard value={stats.giftsSent} label="Gifts" delay={0.2} />
-            <StatCard value={stats.valueLocked} label="Locked" delay={0.3} />
-            <StatCard value={stats.activeUsers} label="Users" delay={0.4} />
+            <StatCard value={stats.giftsSent} label="Created" delay={0.2} />
+            <StatCard value={stats.ethLocked} label="ETH Locked" delay={0.3} />
+            <StatCard value={stats.usdcLocked} label="USDC Locked" delay={0.4} />
         </section>
 
         {/* Features */}
         <section className="mb-12 space-y-3">
-          <FeatureCard icon={<Lock className="h-5 w-5" />} title="Time-Locked" description="Set exact unlock time." delay={0.2} />
-          <FeatureCard icon={<Diamond className="h-5 w-5" />} title="NFT Keys" description="Recipient gets a unique key." delay={0.3} />
-          <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless smart contracts." delay={0.4} />
+          <FeatureCard icon={<Lock className="h-5 w-5" />} title="Time-Locked" description="Set exact unlock time for gifts." delay={0.2} />
+          {/* New Red Packet Mention */}
+          <FeatureCard icon={<Users className="h-5 w-5" />} title="Red Packets" description="Share crypto with multiple friends at once." delay={0.3} />
+          <FeatureCard icon={<Diamond className="h-5 w-5" />} title="NFT Keys" description="Recipient gets a unique key." delay={0.4} />
+          <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless Base smart contracts." delay={0.5} />
         </section>
 
         {/* Trust & Transparency */}
         <section className="rounded-3xl bg-secondary/50 p-6">
           <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
           <div className="space-y-4">
-             <TrustLink href={`https://base-sepolia.blockscout.com/address/${CONTRACT_ADDRESS}`} text="View Contract on Blockscout" />
+             {/* Fixed Blockscout URL Issue */}
+             <TrustLink href={`https://base-sepolia.blockscout.com/address/${0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c}`} text="View Contract on Basescan" />
              <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
-             {/* Audit Report Link Added */}
              <TrustLink href="#" text="View Audit Report" />
           </div>
         </section>

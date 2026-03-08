@@ -8,12 +8,16 @@ import { BottomNav } from "@/components/bottom-nav";
 import { ConfettiEffect } from "@/components/confetti-effect";
 import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
-import { Clipboard, Loader2, AlertTriangle, User, UserX, AlertCircle } from "lucide-react";
+import { Clipboard, Loader2, AlertTriangle, User, UserX, AlertCircle, Gift, Copy, Share2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 
-const CONTRACT_ADDRESS = "0xAa70c7FCd42ec34EC32F95F9dAdC5A9DC1EAb0Bc";
+// NEW ABI 
+import contractAbi from "@/contractAbi.json";
+
+// New Smart Contract Address
+const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const CHAIN_ID_HEX = "0x14a34"; 
 const CHAIN_ID_DECIMAL = 84532;
@@ -21,8 +25,13 @@ const STORAGE_KEY = "yupp_wallet_connected";
 const ETH_PRESETS = ["0.001", "0.01", "0.05", "0.1", "0.5"];
 const USDC_PRESETS = ["5", "10", "20", "50", "100"];
 
-const ERC20_ABI = ["function balanceOf(address owner) view returns (uint256)", "function approve(address spender, uint256 amount) returns (bool)", "function allowance(address owner, address spender) view returns (uint256)", "function decimals() view returns (uint8)", "function symbol() view returns (string)"];
-const GIFT_CONTRACT_ABI = ["function createGift(address _recipient, address _tokenAddress, uint256 _amount, uint256 _unlockTime, string _message) payable"];
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)", 
+  "function approve(address spender, uint256 amount) returns (bool)", 
+  "function allowance(address owner, address spender) view returns (uint256)", 
+  "function decimals() view returns (uint8)", 
+  "function symbol() view returns (string)"
+];
 
 // Wallet Hook with Silent Connect
 function useEvmWallet() {
@@ -33,7 +42,6 @@ function useEvmWallet() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
-  // Silent Connect
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -51,7 +59,6 @@ function useEvmWallet() {
     } catch (e) { console.error("Silent connect error", e); }
   }, []);
 
-  // Manual Connect
   const connect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     setIsConnecting(true);
@@ -71,7 +78,6 @@ function useEvmWallet() {
     finally { setIsConnecting(false); }
   }, []);
 
-  // Disconnect
   const confirmDisconnect = useCallback(() => {
     setAddress("");
     setSigner(null);
@@ -113,22 +119,35 @@ function useEvmWallet() {
 export default function CreatePage() {
   const { provider, signer, address, chainId, connect, disconnect, confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting, ensureChain } = useEvmWallet();
 
+  // Mode State
+  const [isRedPacket, setIsRedPacket] = useState(false);
+
+  // Common State
   const [selectedToken, setSelectedToken] = useState<"ETH" | "USDC">("ETH");
   const [amount, setAmount] = useState("");
-  const [recipientInput, setRecipientInput] = useState("");
-  const [resolvedAddress, setResolvedAddress] = useState("");
   const [unlockDate, setUnlockDate] = useState("");
   const [unlockTime, setUnlockTime] = useState("");
   const [message, setMessage] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [balances, setBalances] = useState({ ETH: "0.0", USDC: "0.0" });
   const [usdcDecimals, setUsdcDecimals] = useState(6);
-  const [isResolving, setIsResolving] = useState(false);
   const [needsApproval, setNeedsApproval] = useState(false);
   const [loadingStep, setLoadingStep] = useState<"IDLE" | "APPROVING" | "CREATING">("IDLE");
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [showConfetti, setShowConfetti] = useState(false);
+
+  // Single Gift State
+  const [recipientInput, setRecipientInput] = useState("");
+  const [resolvedAddress, setResolvedAddress] = useState("");
+  const [isResolving, setIsResolving] = useState(false);
+  const [showGiftModal, setShowGiftModal] = useState(false);
   const [successData, setSuccessData] = useState<any>(null);
+
+  // Red Packet State
+  const [maxClaimers, setMaxClaimers] = useState("10");
+  const [distributionType, setDistributionType] = useState<"EQUAL" | "LUCKY">("EQUAL");
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [generatedLink, setGeneratedLink] = useState("");
 
   // Fetch Balances
   const fetchBalances = useCallback(async () => {
@@ -188,12 +207,22 @@ export default function CreatePage() {
       const bal = selectedToken === "ETH" ? balances.ETH : balances.USDC;
       if (parseFloat(amount) > parseFloat(bal)) newErrors.amount = "Insufficient balance";
     }
-    if (!resolvedAddress) newErrors.recipient = "Invalid address or name";
+    
+    if (!isRedPacket) {
+        if (!resolvedAddress) newErrors.recipient = "Invalid address or name";
+    } else {
+        const claimersNum = Number(maxClaimers);
+        if (!maxClaimers || isNaN(claimersNum) || claimersNum <= 0 || !Number.isInteger(claimersNum)) {
+            newErrors.claimers = "Enter a valid whole number";
+        }
+    }
+
     if (!unlockDate || !unlockTime) { newErrors.date = "Select date & time"; } else {
       const targetTime = new Date(`${unlockDate}T${unlockTime}`);
       const minTime = new Date(Date.now() + 60 * 1000); 
       if (targetTime < minTime) { newErrors.date = "Time must be at least 1 min in future"; }
     }
+    
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -206,11 +235,17 @@ export default function CreatePage() {
 
     try {
       setLoadingStep("IDLE");
+      setErrors({}); 
       const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
-      const giftContract = new Contract(CONTRACT_ADDRESS, GIFT_CONTRACT_ABI, signer);
+      
+      const giftContract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
+      
       const decimals = selectedToken === "ETH" ? 18 : usdcDecimals;
       const amountWei = parseUnits(amount, decimals);
+      
       const unlockTimestamp = Math.floor(new Date(`${unlockDate}T${unlockTime}`).getTime() / 1000);
+      const unlockTimeBigInt = BigInt(unlockTimestamp);
+      
       const metadata = { content: message || "", isAnonymous: isAnonymous };
       const obfuscatedMessage = btoa(JSON.stringify(metadata));
 
@@ -220,33 +255,87 @@ export default function CreatePage() {
             setLoadingStep("APPROVING");
             const txApprove = await usdcContract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
             await txApprove.wait();
+            
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
 
       setLoadingStep("CREATING");
       const tokenArg = selectedToken === "ETH" ? ZeroAddress : USDC_ADDRESS;
-      const valueArg = selectedToken === "ETH" ? amountWei : 0;
-      const tx = await giftContract.createGift(resolvedAddress, tokenArg, amountWei, unlockTimestamp, obfuscatedMessage, { value: valueArg });
-      await tx.wait();
+      const valueArg = selectedToken === "ETH" ? amountWei : BigInt(0); 
       
-      setSuccessData({
-         token: selectedToken, amount: amount, recipient: resolvedAddress, unlockDate: new Date(`${unlockDate}T${unlockTime}`),
-         message: message, txHash: tx.hash, nftTokenId: "Minted", isAnonymous: isAnonymous
-      });
-      setShowSuccess(true);
+      let tx;
+      
+      const txOptions: any = { value: valueArg };
+      
+      if (isRedPacket) {
+          const maxClaimersBigInt = BigInt(Math.floor(Number(maxClaimers)));
+          const isLucky = distributionType === "LUCKY";
+          
+          tx = await giftContract.createRedPacket(
+              tokenArg, 
+              amountWei, 
+              maxClaimersBigInt, 
+              unlockTimeBigInt, 
+              isLucky,            // bool _isRandom
+              isAnonymous,        // bool _isAnonymous (Added)
+              obfuscatedMessage,  // string _message
+              txOptions
+          );
+          await tx.wait();
+          
+          setGeneratedLink(`${window.location.origin}/packet/${tx.hash.slice(0, 10)}`);
+          setShowLinkModal(true);
+      } else {
+          tx = await giftContract.createGift(
+              resolvedAddress, 
+              tokenArg, 
+              amountWei, 
+              unlockTimeBigInt, 
+              isAnonymous,        // bool _isAnonymous (Added)
+              obfuscatedMessage,  // string _message
+              txOptions
+          );
+          await tx.wait();
+          
+          setSuccessData({
+             token: selectedToken, amount: amount, recipient: resolvedAddress, unlockDate: new Date(`${unlockDate}T${unlockTime}`),
+             message: message, txHash: tx.hash, nftTokenId: "Minted", isAnonymous: isAnonymous
+          });
+          setShowGiftModal(true);
+      }
+      
+      setShowConfetti(true);
       setLoadingStep("IDLE");
       fetchBalances();
 
     } catch (err: any) {
       console.error(err);
       setLoadingStep("IDLE");
-      if (err.code === "ACTION_REJECTED") return;
-      setErrors({ submit: "Transaction failed." });
+      
+      if (err.code === "ACTION_REJECTED") {
+          setErrors({ submit: "Transaction was rejected by user." });
+          return;
+      }
+      
+      let errorMsg = "Transaction failed.";
+      if (err.reason) {
+          errorMsg = err.reason;
+          if (err.reason.includes("require(false)")) {
+              errorMsg = "Contract Rejected: The smart contract might not fully support this specific feature (Try ETH or Lucky Draw).";
+          }
+      } 
+      else if (err.data && err.data.message) errorMsg = err.data.message;
+      else if (err.message && err.message.length < 50) errorMsg = err.message;
+      
+      setErrors({ submit: errorMsg });
     }
   };
 
   const handleResetForm = () => {
-    setShowSuccess(false);
+    setShowGiftModal(false);
+    setShowLinkModal(false);
+    setShowConfetti(false);
     setAmount("");
     setRecipientInput("");
     setResolvedAddress("");
@@ -255,6 +344,7 @@ export default function CreatePage() {
     setMessage("");
     setIsAnonymous(false);
     setSelectedToken("ETH");
+    setMaxClaimers("10");
   };
 
   const handlePaste = async () => { try { const text = await navigator.clipboard.readText(); handleRecipientChange(text); } catch {} };
@@ -262,11 +352,12 @@ export default function CreatePage() {
   return (
     <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
       <Header isConnected={!!address} address={address} onConnect={connect} onDisconnect={disconnect} />
-      <ConfettiEffect trigger={showSuccess} />
+      <ConfettiEffect trigger={showConfetti} />
+      
       <main className="mx-auto max-w-[480px] px-6 py-8">
         <div className="mb-8 text-center">
-             <h1 className="text-3xl font-black tracking-tight">Create Gift</h1>
-             <p className="font-medium text-muted-foreground">Wrap crypto for the future</p>
+             <h1 className="text-3xl font-black tracking-tight">{isRedPacket ? "Create Red Packet" : "Create Gift"}</h1>
+             <p className="font-medium text-muted-foreground">{isRedPacket ? "Create a shareable link for everyone" : "Wrap crypto for the future"}</p>
         </div>
 
         {chainId && chainId !== CHAIN_ID_DECIMAL && (
@@ -276,10 +367,19 @@ export default function CreatePage() {
             </div>
         )}
 
+        <div className="mb-6 flex rounded-full bg-secondary p-1 border border-border/50">
+           <button onClick={() => setIsRedPacket(false)} className={cn("flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200", !isRedPacket ? "bg-white text-black shadow-sm dark:bg-black dark:text-white" : "text-muted-foreground hover:text-foreground")}>
+             <span className="flex items-center justify-center gap-2"><Gift className="h-4 w-4"/> Single Gift</span>
+           </button>
+           <button onClick={() => setIsRedPacket(true)} className={cn("flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200", isRedPacket ? "bg-white text-black shadow-sm dark:bg-black dark:text-white" : "text-muted-foreground hover:text-foreground")}>
+             <span className="flex items-center justify-center gap-2">🧧 Red Packet</span>
+           </button>
+        </div>
+
         <div className="space-y-6">
           <div className="rounded-[2rem] border border-border bg-card p-6 shadow-sm">
             <div className="mb-4 flex justify-between items-center text-sm font-bold text-muted-foreground">
-                <span>Asset</span>
+                <span>{isRedPacket ? "Total Pool Amount" : "Asset"}</span>
                 <span>Bal: {selectedToken === "ETH" ? parseFloat(balances.ETH).toFixed(4) : parseFloat(balances.USDC).toFixed(2)}</span>
             </div>
             <div className="mb-4 flex gap-3">
@@ -291,21 +391,47 @@ export default function CreatePage() {
             </div>
             <div className="mt-4 flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
                 {(selectedToken === "ETH" ? ETH_PRESETS : USDC_PRESETS).map((val) => (
-                    <button key={val} onClick={() => setAmount(val)} className="rounded-full bg-secondary px-4 py-2 text-xs font-bold text-foreground transition-colors hover:bg-black hover:text-white">{val}</button>
+                    <button key={val} onClick={() => setAmount(val)} className="rounded-full bg-secondary px-4 py-2 text-xs font-bold text-foreground transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black">{val}</button>
                 ))}
             </div>
             {errors.amount && <p className="mt-2 text-sm font-bold text-red-500">{errors.amount}</p>}
           </div>
 
-           <div className="space-y-2">
-            <label className="ml-2 text-sm font-bold text-muted-foreground">Recipient</label>
-            <div className="relative rounded-2xl bg-secondary p-1">
-                <input value={recipientInput} onChange={(e) => handleRecipientChange(e.target.value)} placeholder="0x... or basename.eth" className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50" />
-                <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50"><Clipboard className="h-5 w-5 text-primary" /></button>
-            </div>
-            {resolvedAddress && resolvedAddress !== recipientInput && <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.slice(0,6)}...{resolvedAddress.slice(-4)}</p>}
-            {errors.recipient && <p className="ml-2 text-xs font-bold text-red-500">{errors.recipient}</p>}
-          </div>
+          {!isRedPacket ? (
+             <div className="space-y-2">
+                <label className="ml-2 text-sm font-bold text-muted-foreground">Recipient</label>
+                <div className="relative rounded-2xl bg-secondary p-1">
+                    <input value={recipientInput} onChange={(e) => handleRecipientChange(e.target.value)} placeholder="0x... or basename.eth" className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50" />
+                    <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50 dark:bg-card"><Clipboard className="h-5 w-5 text-primary" /></button>
+                </div>
+                {resolvedAddress && resolvedAddress !== recipientInput && <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.slice(0,6)}...{resolvedAddress.slice(-4)}</p>}
+                {errors.recipient && <p className="ml-2 text-xs font-bold text-red-500">{errors.recipient}</p>}
+             </div>
+          ) : (
+            <>
+                <div className="space-y-2">
+                    <label className="ml-2 text-sm font-bold text-muted-foreground">How many people can claim?</label>
+                    <div className="relative rounded-2xl bg-secondary p-1">
+                        <input type="number" value={maxClaimers} onChange={(e) => setMaxClaimers(e.target.value)} placeholder="e.g. 50" className="w-full rounded-xl bg-transparent p-4 text-xl font-black outline-none text-center" />
+                    </div>
+                    {errors.claimers && <p className="ml-2 text-xs font-bold text-red-500">{errors.claimers}</p>}
+                </div>
+
+                <div className="space-y-2">
+                    <label className="ml-2 text-sm font-bold text-muted-foreground">Distribution Type</label>
+                    <div className="flex gap-3">
+                        <button onClick={() => setDistributionType("EQUAL")} className={cn("flex-1 p-4 rounded-2xl border-2 text-left transition-all bg-secondary", distributionType === "EQUAL" ? "border-primary ring-2 ring-primary/20" : "border-transparent")}>
+                            <h3 className="font-black text-foreground">Equal Split</h3>
+                            <p className="text-xs text-muted-foreground mt-1">Everyone gets exactly {amount ? (Number(amount)/Number(maxClaimers || 1)).toFixed(4) : "0"} {selectedToken}</p>
+                        </button>
+                        <button onClick={() => setDistributionType("LUCKY")} className={cn("flex-1 p-4 rounded-2xl border-2 text-left transition-all bg-secondary", distributionType === "LUCKY" ? "border-primary ring-2 ring-primary/20" : "border-transparent")}>
+                            <h3 className="font-black text-foreground">Lucky Draw</h3>
+                            <p className="text-xs text-muted-foreground mt-1">Random amounts. Early birds get lucky!</p>
+                        </button>
+                    </div>
+                </div>
+            </>
+          )}
 
           <div className="space-y-2">
             <label className="ml-2 text-sm font-bold text-muted-foreground">Unlock Date</label>
@@ -326,7 +452,7 @@ export default function CreatePage() {
 
           <div onClick={() => setIsAnonymous(!isAnonymous)} className="flex cursor-pointer items-center justify-between rounded-2xl border border-border p-4 hover:bg-secondary/50 transition-colors">
             <div className="flex items-center gap-3">
-                <div className={cn("flex h-10 w-10 items-center justify-center rounded-full", isAnonymous ? "bg-black text-white" : "bg-secondary text-muted-foreground")}>{isAnonymous ? <UserX className="h-5 w-5" /> : <User className="h-5 w-5" />}</div>
+                <div className={cn("flex h-10 w-10 items-center justify-center rounded-full", isAnonymous ? "bg-black text-white dark:bg-white dark:text-black" : "bg-secondary text-muted-foreground")}>{isAnonymous ? <UserX className="h-5 w-5" /> : <User className="h-5 w-5" />}</div>
                 <div className="flex flex-col"><span className="text-sm font-bold">Anonymous Gift</span><span className="text-xs text-muted-foreground">Hide sender address</span></div>
             </div>
             <div className={cn("h-6 w-11 rounded-full transition-colors relative", isAnonymous ? "bg-primary" : "bg-muted-foreground/30")}>
@@ -334,16 +460,54 @@ export default function CreatePage() {
             </div>
           </div>
 
-          <Button onClick={handleSubmit} disabled={loadingStep !== "IDLE" || !address || isConnecting} className="w-full h-14 rounded-full text-lg font-black shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all">
-            {loadingStep === "APPROVING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Approving...</span>) : loadingStep === "CREATING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Minting Gift...</span>) : !address ? "Connect Wallet" : "Create Gift"}
+          <Button onClick={handleSubmit} disabled={loadingStep !== "IDLE" || !address || isConnecting} className="w-full h-14 rounded-full text-lg font-black shadow-lg shadow-primary/20 text-white hover:scale-[1.02] active:scale-[0.98] transition-all">
+            {loadingStep === "APPROVING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Approving...</span>) : loadingStep === "CREATING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Minting...</span>) : !address ? "Connect Wallet" : (isRedPacket ? "Create Shareable Link" : "Create Gift")}
           </Button>
-          {errors.submit && <p className="text-center text-sm font-bold text-red-500">{errors.submit}</p>}
+          
+          {errors.submit && (
+              <div className="mt-2 rounded-xl bg-red-50 p-3 border border-red-100">
+                  <p className="text-center text-sm font-bold text-red-600">{errors.submit}</p>
+              </div>
+          )}
         </div>
       </main>
-      <BottomNav />
-      <GiftModal isOpen={showSuccess} onClose={handleResetForm} type="success" gift={successData || {}} onSendAnother={handleResetForm} />
       
-      {/* Disconnect Modal */}
+      <BottomNav />
+      
+      <GiftModal isOpen={showGiftModal} onClose={handleResetForm} type="success" gift={successData || {}} onSendAnother={handleResetForm} />
+      
+      <AnimatePresence>
+        {showLinkModal && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
+                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-sm rounded-3xl bg-white dark:bg-card p-6 text-center shadow-2xl">
+                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-red-600">
+                        <Share2 className="h-8 w-8" />
+                    </div>
+                    <h3 className="mb-2 text-2xl font-black text-foreground">Packet Ready!</h3>
+                    <p className="mb-6 text-sm text-muted-foreground">Share this link with your friends. Anyone with the link can claim.</p>
+                    
+                    {/* 👇 3. Link copy button fix করা হয়েছে */}
+                    <div className="mb-6 flex items-center justify-between bg-secondary p-4 rounded-2xl border border-border overflow-hidden">
+                        <span className="text-sm font-bold truncate mr-2 text-foreground">{generatedLink}</span>
+                        <button onClick={() => navigator.clipboard.writeText(generatedLink)} className="p-2 bg-white text-black rounded-full shadow-sm hover:bg-gray-200 flex-shrink-0"><Copy className="h-4 w-4"/></button>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3">
+                        {/* 👇 1. Share on X (Twitter) - White background, Black text */}
+                        <Button className="rounded-xl font-bold bg-white text-black hover:bg-gray-100 h-12 border-none">Share on X (Twitter)</Button>
+                        
+                        {/* 👇 2. Post on Base - White background, Blue text */}
+<Button className="rounded-xl font-bold bg-black !text-[#0052FF] hover:bg-blue-50 h-12 border-none">
+  Post on Base App
+</Button>
+                        
+                        <Button onClick={handleResetForm} variant="ghost" className="rounded-xl font-bold h-12 mt-2">Close</Button>
+                    </div>
+                </motion.div>
+            </div>
+        )}
+      </AnimatePresence>
+
       <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
     </div>
   );
