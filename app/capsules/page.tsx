@@ -1,4 +1,4 @@
-// app/capsules/page.tsx  (বা app/capsule/page.tsx)
+// app/capsules/page.tsx
 
 "use client";
 
@@ -146,7 +146,7 @@ export default function CapsulesPage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- Optimized Data Fetching Logic (Fixed RPC Limits) ---
+  // --- Optimized Data Fetching Logic (Fixed RPC Limits & Sorting) ---
   const fetchCapsules = useCallback(async (isSilent = false) => {
     if (!provider || !address) return;
     
@@ -158,7 +158,6 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // Helper: Batch API Calling to avoid RPC limits
       const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
           const results = [];
           for (let i = total; i >= 1; i -= batchSize) {
@@ -171,9 +170,7 @@ export default function CapsulesPage() {
           return results;
       };
 
-      // ==========================================
       // 1. Fetch Normal Gifts
-      // ==========================================
       try {
           const totalGifts = Number(await contract.giftCounter());
           const rawGifts = await fetchInBatches(totalGifts, (id) => contract.getGiftDetails(id));
@@ -207,7 +204,8 @@ export default function CapsulesPage() {
               const isUnlocked = new Date() >= unlockDate;
               
               const baseData = {
-                id: gId, sender: gSender, recipient: gRecipient, amount: formattedAmount,
+                id: `gift-${gId}`, // Prefix to avoid ID collision
+                sender: gSender, recipient: gRecipient, amount: formattedAmount,
                 token: tokenSymbol, unlockDate: unlockDate, isUnlocked: isUnlocked,
                 isWithdrawn: gIsWithdrawn, isAnonymous: isAnonymous || gIsAnonymous,
                 message: content, realMessage: content, txHash: "", isRedPacket: false
@@ -223,17 +221,14 @@ export default function CapsulesPage() {
           });
       } catch (err) { }
 
-      // ==========================================
-      // 2. Fetch Red Packets (100% Fixed Tracker)
-      // ==========================================
+      // 2. Fetch Red Packets
       try {
           const totalRPs = Number(await contract.redPacketCounter());
-          
-          // Get fast claim history logs safely
           const myClaims: { [key: string]: string } = {};
+          
           try {
               const currentBlock = await provider.getBlockNumber();
-              const fromBlock = Math.max(0, currentBlock - 45000); 
+              const fromBlock = Math.max(0, currentBlock - 10000); // Safer block range
               const claimFilter = contract.filters.RedPacketClaimed(null, address);
               const rawLogs = await contract.queryFilter(claimFilter, fromBlock, "latest");
               
@@ -244,9 +239,8 @@ export default function CapsulesPage() {
                       myClaims[pId] = val.toString(); 
                   }
               });
-          } catch(e) {} // Fallback inside the loop if this fails
+          } catch(e) {} 
 
-          // Fetch Packets via Safe Batches
           const rawRPs = await fetchInBatches(totalRPs, (id) => contract.getRedPacketDetails(id));
 
           for (const rp of rawRPs) {
@@ -301,27 +295,38 @@ export default function CapsulesPage() {
                       hasClaimed = true;
                       exactAmountStr = formatUnits(myClaims[rpId], decimals);
                   } else {
-                      // Accurate Fallback for Older Claims
                       try {
                           const userClaimed = await contract.hasClaimedRedPacket(rpId, address);
                           if (userClaimed) {
                               hasClaimed = true;
-                              exactAmountStr = "Claimed ✓"; 
+                              
+                              // Attempt to fetch exact claimed amount from mapping if possible
+                              let fetchedExact = null;
+                              try { fetchedExact = await contract.claimedAmounts(rpId, address); } catch(e){}
+                              if(!fetchedExact) { try { fetchedExact = await contract.getClaimedAmount(rpId, address); } catch(e){} }
+                              
+                              if (fetchedExact && Number(fetchedExact) > 0) {
+                                  exactAmountStr = formatUnits(fetchedExact, decimals);
+                              } else {
+                                  // Fallback: Calculate Average/Estimated Amount
+                                  const avgAmt = Number(formatUnits(rpTotalAmount, decimals)) / rpTotalClaimers;
+                                  exactAmountStr = avgAmt.toString();
+                              }
                           }
                       } catch (e) {}
                   }
 
                   if (hasClaimed) {
                       let displayAmt = exactAmountStr;
-                      if (exactAmountStr !== "Claimed ✓" && exactAmountStr !== "") {
-                          displayAmt = parseFloat(exactAmountStr).toFixed(4).replace(/\.?0+$/, '');
+                      if (displayAmt) {
+                          displayAmt = parseFloat(displayAmt).toFixed(6).replace(/\.?0+$/, '');
                       }
 
                       received.push({
                           id: `rp-claim-${rpId}`,
                           sender: rpSender,
                           recipient: address,
-                          amount: displayAmt || "Claimed ✓",
+                          amount: displayAmt,
                           token: tokenSymbol,
                           unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
                           isUnlocked: true,
@@ -334,14 +339,23 @@ export default function CapsulesPage() {
                       });
                   }
 
-              } catch (err) { console.error("Red packet loop processing error", err); }
+              } catch (err) { }
           }
-      } catch (err) { console.warn("Red packet overall error", err); }
+      } catch (err) { }
+
+      // --- Sorter Function (Mixes Gifts and Red Packets, Newest First) ---
+      const sortByIdDesc = (a: any, b: any) => {
+          const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
+          const numB = parseInt(b.id.toString().replace(/\D/g, '')) || 0;
+          return numB - numA; // Sorts descending (highest ID at the top)
+      };
+
+      sent.sort(sortByIdDesc);
+      received.sort(sortByIdDesc);
 
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
 
-      // Refresh balances quietly
       fetchBalances(address, provider);
       
     } catch (error) { console.error("Fetch Error:", error); } 
@@ -354,9 +368,9 @@ export default function CapsulesPage() {
   // --- Auto Reload System (Refreshes data every 10 seconds) ---
   useEffect(() => {
     if (provider && address) {
-        fetchCapsules(); // Initial load
+        fetchCapsules(); 
         const interval = setInterval(() => {
-            fetchCapsules(true); // Silent Auto Reload
+            fetchCapsules(true); 
         }, 10000);
         return () => clearInterval(interval);
     }
@@ -391,7 +405,7 @@ export default function CapsulesPage() {
     setIsClaiming(true);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-      const tx = await contract.withdrawGift(selectedCapsule.id);
+      const tx = await contract.withdrawGift(selectedCapsule.id.replace('gift-', ''));
       await tx.wait();
       
       const claimedAmount = selectedCapsule.amount;
