@@ -85,7 +85,6 @@ export default function CapsulesPage() {
       const _signer = await _provider.getSigner();
       const network = await _provider.getNetwork();
       
-      // Fixed BigInt literal issue for TS
       if (Number(network.chainId) !== 84532) {
           try {
               await window.ethereum.request({
@@ -146,7 +145,7 @@ export default function CapsulesPage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- Optimized Data Fetching Logic (Gifts + Red Packets) ---
+  // --- Optimized Data Fetching Logic ---
   const fetchCapsules = useCallback(async () => {
     if (!provider || !address) return;
     setIsLoadingData(true);
@@ -162,16 +161,12 @@ export default function CapsulesPage() {
       try {
           const totalGifts = Number(await contract.giftCounter());
           const promises = [];
-          for (let i = totalGifts; i >= 1; i--) {
-              promises.push(contract.getGiftDetails(i).catch(() => null));
-          }
-          
+          for (let i = totalGifts; i >= 1; i--) promises.push(contract.getGiftDetails(i).catch(() => null));
           const rawGifts = await Promise.all(promises);
 
           rawGifts.forEach((gift: any) => {
             if (!gift) return;
             try {
-              // ABI: id(0), sender(1), recipient(2), tokenAddress(3), amount(4), unlockTime(5), isAnonymous(6), isWithdrawn(7), isCancelled(8), message(9)
               const gId = (gift.id ?? gift[0]).toString();
               const gSender = (gift.sender ?? gift[1]).toString();
               const gRecipient = (gift.recipient ?? gift[2]).toString();
@@ -224,41 +219,36 @@ export default function CapsulesPage() {
       } catch (err) { console.error("Error fetching regular gifts", err); }
 
       // ==========================================
-      // 2. Fetch Red Packets (Sent + Accurate Claims)
+      // 2. Fetch Red Packets (Fully Fixed Tracking)
       // ==========================================
       try {
           const totalRPs = Number(await contract.redPacketCounter());
           
-          // Fetch Claims (Only events where claimer is the current user)
+          // Phase A: Fetch Global Logs (Safely without failing on block limits)
           const myClaims: { [key: string]: bigint } = {};
           try {
-              const currentBlock = await provider.getBlockNumber();
-              const fromB = Math.max(0, currentBlock - 90000); // Prevents RPC limits while getting good history
-              
-              // Filter exactly by RedPacketClaimed(packetId, claimer, amount)
+              // Get logs from block 0, filtering by specific user address index
               const claimFilter = contract.filters.RedPacketClaimed(null, address);
-              const rawLogs = await contract.queryFilter(claimFilter, fromB, "latest");
+              const rawLogs = await contract.queryFilter(claimFilter, 0, "latest");
               
               rawLogs.forEach(_log => {
                   const log = _log as any; 
                   if (log.args) {
-                      const pId = log.args[0].toString(); // packetId
-                      const val = log.args[2];            // amount
+                      const pId = log.args[0].toString();
+                      const val = log.args[2]; 
                       myClaims[pId] = val; 
                   }
               });
-          } catch(e) { console.warn("Log query issue (RPC limit reached)", e); }
+          } catch(e) { console.warn("Global RPC filter warning, using fallback verification..."); }
 
+          // Phase B: Process Each Packet
           const rpPromises = [];
-          for (let i = totalRPs; i >= 1; i--) {
-              rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
-          }
+          for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
           const rawRPs = await Promise.all(rpPromises);
 
-          rawRPs.forEach((rp: any) => {
-              if (!rp) return;
+          for (let rp of rawRPs) {
+              if (!rp) continue;
               try {
-                  // ABI: id(0), sender(1), tokenAddress(2), totalAmount(3), remainingAmount(4), totalClaimers(5), remainingClaimers(6), unlockTime(7), isRandom(8), isAnonymous(9), isCancelled(10), message(11)
                   const rpId = (rp.id ?? rp[0]).toString();
                   const rpSender = (rp.sender ?? rp[1]).toString();
                   const rpTokenAddress = (rp.tokenAddress ?? rp[2]).toString();
@@ -271,7 +261,7 @@ export default function CapsulesPage() {
                   const rpIsCancelled = rp.isCancelled ?? rp[10];
                   const rpMessage = rp.message ?? rp[11] ?? "";
 
-                  if (!rpSender || rpSender === ethers.ZeroAddress) return;
+                  if (!rpSender || rpSender === ethers.ZeroAddress) continue;
 
                   const { content, isAnonymous } = parseGiftMessage(rpMessage);
                   const isEth = rpTokenAddress === ethers.ZeroAddress;
@@ -281,7 +271,7 @@ export default function CapsulesPage() {
                   const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
                   const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
 
-                  // === For Sent Tab ===
+                  // === Add To Sent Tab ===
                   if (rpSender.toLowerCase() === address.toLowerCase()) {
                       const formattedAmount = formatUnits(rpTotalAmount, decimals);
                       sent.push({
@@ -301,17 +291,38 @@ export default function CapsulesPage() {
                       });
                   }
 
-                  // === For Received Tab (Claimed Red Packets) ===
-                  if (myClaims[rpId]) {
-                      // Formatting string securely to avoid extra zeros
-                      const claimedAmountStr = formatUnits(myClaims[rpId], decimals);
-                      const claimedAmountExact = parseFloat(claimedAmountStr).toFixed(4).replace(/\.?0+$/, '');
+                  // === Add To Received Tab ===
+                  let hasClaimed = !!myClaims[rpId];
+                  let exactAmountBigInt = myClaims[rpId];
+
+                  // Fallback Check if RPC log limit missed this packet
+                  if (!hasClaimed) {
+                      try {
+                          const userClaimed = await contract.hasClaimedRedPacket(rpId, address);
+                          if (userClaimed) {
+                              hasClaimed = true;
+                              // Fetch only specific log to avoid RPC limits
+                              const singleFilter = contract.filters.RedPacketClaimed(BigInt(rpId), address);
+                              const singleLog = await contract.queryFilter(singleFilter, 0, "latest");
+                              if (singleLog.length > 0) {
+                                  exactAmountBigInt = (singleLog[0] as any).args[2];
+                              }
+                          }
+                      } catch (e) {}
+                  }
+
+                  if (hasClaimed) {
+                      let displayAmountStr = "Claimed";
+                      if (exactAmountBigInt) {
+                          const formattedRaw = formatUnits(exactAmountBigInt, decimals);
+                          displayAmountStr = parseFloat(formattedRaw).toFixed(4).replace(/\.?0+$/, '');
+                      }
                       
                       received.push({
                           id: `rp-claim-${rpId}`,
                           sender: rpSender,
                           recipient: address,
-                          amount: claimedAmountExact || claimedAmountStr,
+                          amount: displayAmountStr,
                           token: tokenSymbol,
                           unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
                           isUnlocked: true,
@@ -324,7 +335,7 @@ export default function CapsulesPage() {
                       });
                   }
               } catch (err) { console.error("Error processing red packet element", err); }
-          });
+          }
       } catch (err) { console.warn("Red packet error", err); }
 
       setMySentCapsules(sent);

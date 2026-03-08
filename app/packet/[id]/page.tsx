@@ -1,3 +1,5 @@
+// app/packet/[ID]/page.tsx
+
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -11,7 +13,6 @@ import { ConfettiEffect } from "@/components/confetti-effect";
 import { ethers, BrowserProvider, Contract } from "ethers";
 import contractAbi from "@/contractAbi.json";
 
-// TypeScript-কে বলে দিচ্ছি যে window-এর ভেতর ethereum থাকতে পারে
 declare global {
   interface Window {
     ethereum?: any;
@@ -22,7 +23,6 @@ const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
 const BASE_SEPOLIA_ID = "0x14a34";
 const STORAGE_KEY = "yupp_wallet_connected";
 
-// Helper: Message Decode করা
 const parseGiftMessage = (rawMsg: string) => {
   try {
     const decoded = atob(rawMsg);
@@ -43,27 +43,23 @@ export default function RedPacketClaimPage() {
   const router = useRouter();
   const packetId = params.id as string;
 
-  // Wallet States
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<any>(null);
 
-  // Packet & UI States
   const [packetData, setPacketData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isClaiming, setIsClaiming] = useState(false);
   const [hasClaimed, setHasClaimed] = useState(false);
   const [success, setSuccess] = useState(false);
   
-  // New States for Claimed Amount Show
   const [claimedAmount, setClaimedAmount] = useState<string>("");
   const [claimedSymbol, setClaimedSymbol] = useState<string>("ETH");
 
   const [timeLeft, setTimeLeft] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
 
-  // --- Wallet Connection Logic ---
   const setupWallet = async (acc: string, _provider: BrowserProvider) => {
     const _signer = await _provider.getSigner();
     const network = await _provider.getNetwork();
@@ -109,7 +105,6 @@ export default function RedPacketClaimPage() {
     if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
   }, [checkConnection]);
 
-  // --- Fetch Red Packet Data ---
   const fetchPacketData = useCallback(async () => {
     if (!packetId) return;
     
@@ -141,7 +136,6 @@ export default function RedPacketClaimPage() {
     return () => clearInterval(interval);
   }, [fetchPacketData]);
 
-  // --- Timer Logic (Fixed for 00:00:00 bug) ---
   useEffect(() => {
     if (!packetData) return;
     const unlockTimestamp = Number(packetData[7]) * 1000;
@@ -153,15 +147,14 @@ export default function RedPacketClaimPage() {
       if (remaining <= 0) {
         setIsUnlocked(true);
         setTimeLeft(0);
-        return true; // Stop interval
+        return true; 
       } else {
         setIsUnlocked(false);
         setTimeLeft(remaining);
-        return false; // Continue interval
+        return false; 
       }
     };
 
-    // Initial check
     if (updateTimer()) return;
 
     const timer = setInterval(() => {
@@ -171,7 +164,7 @@ export default function RedPacketClaimPage() {
     return () => clearInterval(timer);
   }, [packetData]);
 
-  // --- Claim Logic (Added Log Parsing for Amount) ---
+  // FIXED: Accurate Event Parsing for Claim Amount
   const handleClaim = async () => {
     if (!isConnected || !signer) {
       handleConnect();
@@ -183,7 +176,6 @@ export default function RedPacketClaimPage() {
       const tx = await contract.claimRedPacket(packetId);
       const receipt = await tx.wait(); 
       
-      // Token & Amount Detect Logic
       const tokenAddress = packetData?.[2];
       const isUSDC = tokenAddress && tokenAddress !== ethers.ZeroAddress;
       const decimals = isUSDC ? 6 : 18;
@@ -191,27 +183,30 @@ export default function RedPacketClaimPage() {
       
       let extractedAmount = "";
 
-      // Transaction Event Log থেকে Claim করা Amount বের করা হচ্ছে
       for (const log of receipt.logs) {
           try {
               const parsedLog = contract.interface.parseLog({ topics: [...log.topics], data: log.data });
-              // যদি Event এর নাম Claim রিলেটেড হয়
-              if (parsedLog && parsedLog.name.toLowerCase().includes("claim")) {
-                  // Event থেকে এমাউন্টের ভ্যালুটি খোঁজা হচ্ছে - এখানেই 10n এরর তৈরি করছিল
-                  const val = parsedLog.args.find((a: any) => typeof a === 'bigint' && a > BigInt(10));
-                  if (val) {
-                      const formatted = ethers.formatUnits(val, decimals);
-                      extractedAmount = parseFloat(formatted).toFixed(4).replace(/\.0000$/, ''); // Clean zeros
+              // Check specifically for RedPacketClaimed Event
+              if (parsedLog && parsedLog.name === "RedPacketClaimed") {
+                  // ABI: RedPacketClaimed(packetId, claimer, amount) -> amount is at index 2
+                  const amountValue = parsedLog.args[2]; 
+                  if (amountValue) {
+                      const formatted = ethers.formatUnits(amountValue, decimals);
+                      extractedAmount = parseFloat(formatted).toFixed(4).replace(/\.?0+$/, ''); 
                       break;
                   }
               }
           } catch (e) {
-             // অন্য লগের এরর ইগনোর করবে
+             // Ignore logs that don't match our ABI
           }
       }
 
       if (extractedAmount) {
           setClaimedAmount(extractedAmount);
+          setClaimedSymbol(symbol);
+      } else {
+          // Fallback if event parsing fails but tx succeeds
+          setClaimedAmount("Success");
           setClaimedSymbol(symbol);
       }
       
@@ -234,7 +229,6 @@ export default function RedPacketClaimPage() {
     return `${days > 0 ? `${days}d ` : ''}${hours.toString().padStart(2, '0')}h : ${minutes.toString().padStart(2, '0')}m : ${seconds.toString().padStart(2, '0')}s`;
   };
 
-  // --- Parsed Data ---
   const rawSender = packetData?.[1] || "";
   const remainingAmount = Number(packetData?.[4] || 0);
   const totalClaimers = Number(packetData?.[5] || 0);
@@ -336,7 +330,6 @@ export default function RedPacketClaimPage() {
                             </div>
                             <h1 className="text-2xl font-black text-yellow-300 drop-shadow-md mb-2">Successfully Claimed!</h1>
                             
-                            {/* 👇 Amount Show Section (UI design kept identical) */}
                             {claimedAmount ? (
                                 <div className="bg-black/20 rounded-2xl p-4 mb-6 backdrop-blur-md border border-white/10 shadow-inner">
                                     <p className="text-sm text-yellow-100/70 uppercase tracking-widest mb-1 font-bold">You Received</p>
