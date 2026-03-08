@@ -18,6 +18,10 @@ const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const STORAGE_KEY = "yupp_wallet_connected";
 
+// আপনার প্রজেক্টের আসল USDC অ্যাড্রেসটি এখানে বসাতে পারেন। এটি Base Sepolia এর একটি কমন USDC অ্যাড্রেস
+const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"; 
+const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
+
 // Helpers
 const parseGiftMessage = (rawMsg: string) => {
     try {
@@ -43,7 +47,11 @@ export default function CapsulesPage() {
   const [signer, setSigner] = useState<any>(null);
   const [basename, setBasename] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
+  
+  // Balances
   const [ethBalance, setEthBalance] = useState("0.00");
+  const [usdcBalance, setUsdcBalance] = useState("0.00");
+
   const [activeTab, setActiveTab] = useState<"sent" | "received">("received");
   const [filter, setFilter] = useState<"all" | "ETH" | "USDC">("all");
   const [copied, setCopied] = useState(false);
@@ -55,7 +63,18 @@ export default function CapsulesPage() {
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
-  // --- Wallet Connection Logic ---
+  // --- Wallet Connection & Balance Logic ---
+  const fetchBalances = async (acc: string, _provider: BrowserProvider) => {
+      try {
+          const bal = await _provider.getBalance(acc);
+          setEthBalance(Number(formatEther(bal)).toFixed(4));
+          
+          const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, _provider);
+          const usdcBal = await usdcContract.balanceOf(acc);
+          setUsdcBalance(Number(formatUnits(usdcBal, 6)).toFixed(2));
+      } catch (e) { console.error("Balance fetch error", e); }
+  };
+
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -84,8 +103,7 @@ export default function CapsulesPage() {
       setIsConnected(true);
       localStorage.setItem(STORAGE_KEY, "true");
       
-      const bal = await _provider.getBalance(acc);
-      setEthBalance(Number(formatEther(bal)).toFixed(4));
+      await fetchBalances(acc, _provider);
       
       try {
           const name = await _provider.lookupAddress(acc);
@@ -116,6 +134,7 @@ export default function CapsulesPage() {
     setBasename(null);
     setAvatar(null);
     setEthBalance("0.00");
+    setUsdcBalance("0.00");
     setMySentCapsules([]);
     setMyReceivedCapsules([]);
     localStorage.removeItem(STORAGE_KEY);
@@ -157,7 +176,6 @@ export default function CapsulesPage() {
             if (!gift) return;
             try {
               const gId = gift.id || gift[0];
-              // FIX: Added 'creator' and 'from' fallback to correctly identify USDC sent via Relayer/Proxy
               const gSender = (gift.creator || gift.from || gift.sender || gift[1] || "").toString();
               const gRecipient = (gift.recipient || gift.to || gift[2] || "").toString();
               const gTokenAddress = gift.tokenAddress || gift[3];
@@ -209,46 +227,104 @@ export default function CapsulesPage() {
       } catch (err) { console.error("Error fetching regular gifts", err); }
 
       // ==========================================
-      // 2. Fetch Red Packets (Sent Data)
+      // 2. Fetch Red Packets (Sent + Claimed)
       // ==========================================
       try {
           if (contract.redPacketCounter && contract.getRedPacketDetails) {
               const rpCounter = await contract.redPacketCounter();
               const totalRPs = Number(rpCounter);
+              
+              // ক্লেইম করা অ্যামাউন্ট বের করার জন্য ইভেন্ট লগ স্ক্যান করা হচ্ছে
+              const myClaims: { [key: string]: bigint } = {};
+              try {
+                  const currentBlock = await provider.getBlockNumber();
+                  const allLogs = await provider.getLogs({ 
+                      address: CONTRACT_ADDRESS, 
+                      fromBlock: Math.max(0, currentBlock - 500000), // Last 500k blocks
+                      toBlock: 'latest' 
+                  });
+                  
+                  allLogs.forEach((log) => {
+                      try {
+                          const parsed = contract.interface.parseLog({ topics: [...log.topics], data: log.data });
+                          if (parsed && parsed.name.toLowerCase().includes("claim")) {
+                              const argsArray = Array.from(parsed.args);
+                              // চেক করা হচ্ছে ক্লেইমার এই ইউজার কি না
+                              const isMyClaim = argsArray.some((a: any) => typeof a === 'string' && a.toLowerCase() === address.toLowerCase());
+                              if (isMyClaim) {
+                                  const pId = argsArray[0]?.toString();
+                                  const val = argsArray.find((a: any) => typeof a === 'bigint' && a > BigInt(10));
+                                  if (pId && val) myClaims[pId] = val;
+                              }
+                          }
+                      } catch(e) {} // Ignore parse errors
+                  });
+              } catch(e) { console.warn("Could not fetch claim logs", e); }
+
               const rpPromises = [];
               for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
-              
               const rawRPs = await Promise.all(rpPromises);
 
               rawRPs.forEach((rp: any) => {
                   if (!rp) return;
                   try {
-                      const rpId = rp.id || rp[0];
+                      // Contract ABI return mapping based on RedPacket struct
+                      const rpId = (rp.id || rp[0]).toString();
                       const rpSender = (rp.creator || rp.sender || rp[1] || "").toString();
                       const rpTokenAddress = rp.tokenAddress || rp[2] || ethers.ZeroAddress;
-                      const rpAmount = rp.totalAmount || rp.amount || rp[3]; 
-                      const rpMessage = rp.message || rp[6] || "";
+                      const rpTotalAmount = rp[3] || 0n;
+                      const rpRemainingAmount = rp[4] || 0n;
+                      const rpTotalClaimers = Number(rp[5] || 0);
+                      const rpRemainingClaimers = Number(rp[6] || 0);
+                      const rpUnlockTime = rp[7] || 0n;
+                      const rpIsCancelled = rp[10] || false;
+                      const rpMessage = rp[11] || rp.message || rp[8] || "";
 
                       if (!rpSender) return;
 
-                      const isSender = rpSender.toLowerCase() === address.toLowerCase();
+                      const { content, isAnonymous } = parseGiftMessage(rpMessage);
+                      const isEth = rpTokenAddress === ethers.ZeroAddress;
+                      const tokenSymbol = isEth ? "ETH" : "USDC";
+                      const decimals = isEth ? 18 : 6; 
+                      
+                      // প্যাকেট কি শেষ হয়ে গেছে? (Amount 0 অথবা Claimers 0 অথবা Cancelled)
+                      const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
+                      const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
 
-                      if (isSender) {
-                          const { content, isAnonymous } = parseGiftMessage(rpMessage);
-                          const isEth = rpTokenAddress === ethers.ZeroAddress;
-                          const tokenSymbol = isEth ? "ETH" : "USDC";
-                          const decimals = isEth ? 18 : 6; 
-                          const formattedAmount = rpAmount ? formatUnits(rpAmount, decimals) : "0";
+                      // A. Sent Red Packets Check
+                      if (rpSender.toLowerCase() === address.toLowerCase()) {
+                          const formattedAmount = formatUnits(rpTotalAmount, decimals);
                           
                           sent.push({
-                              id: `rp-${rpId.toString()}`,
+                              id: `rp-${rpId}`,
                               sender: rpSender,
-                              recipient: "Red Packet (Multiple)",
+                              recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
                               amount: formattedAmount,
                               token: tokenSymbol,
-                              unlockDate: new Date(),
+                              unlockDate: new Date(Number(rpUnlockTime) * 1000),
                               isUnlocked: true,
-                              isWithdrawn: false, 
+                              isWithdrawn: isEnded, // পুরোপুরি ক্লেইম হলে Withdrawn (Gray) দেখাবে
+                              isAnonymous: isAnonymous,
+                              message: content,
+                              realMessage: content,
+                              txHash: "",
+                              isRedPacket: true
+                          });
+                          
+                      }
+
+                      // B. Received (Claimed) Red Packets Check
+                      if (myClaims[rpId]) {
+                          const claimedAmountExact = parseFloat(formatUnits(myClaims[rpId], decimals)).toFixed(4).replace(/\.0000$/, '');
+                          received.push({
+                              id: `rp-claim-${rpId}`,
+                              sender: rpSender,
+                              recipient: address,
+                              amount: claimedAmountExact, // ইভেন্ট থেকে পাওয়া সঠিক অ্যামাউন্ট
+                              token: tokenSymbol,
+                              unlockDate: new Date(Number(rpUnlockTime) * 1000),
+                              isUnlocked: true,
+                              isWithdrawn: true, // ইউজারের জন্য এটা অলরেডি ক্লেইমড
                               isAnonymous: isAnonymous,
                               message: content,
                               realMessage: content,
@@ -271,7 +347,7 @@ export default function CapsulesPage() {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
 
-  // --- Auto Unlock Timer Logic (Updated for both Received & Sent) ---
+  // --- Auto Unlock Timer Logic ---
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
 
@@ -310,7 +386,7 @@ export default function CapsulesPage() {
     return () => timers.forEach(clearTimeout);
   }, [myReceivedCapsules, mySentCapsules]);
 
-  // --- Claim Logic (Updated for Instant UI Update) ---
+  // --- Claim Logic (Updated for Instant UI Update & Balance Fetch) ---
   const handleClaim = async () => {
     if (!selectedCapsule || !signer) return;
     setIsClaiming(true);
@@ -322,20 +398,19 @@ export default function CapsulesPage() {
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
       
-      // 1. Optimistic Update: সাথে সাথেই UI থেকে Claim বাটন সরিয়ে Claimed দেখানোর জন্য
+      // Optimistic Update
       setMyReceivedCapsules((prev) => 
         prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c)
       );
 
-      // 2. মডাল বন্ধ করে সাকসেস মেসেজ দেখানো
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
       
-      // 3. ব্যালেন্স ইনস্ট্যান্ট আপডেট করা
-      const bal = await provider?.getBalance(address);
-      if(bal) setEthBalance(Number(formatEther(bal)).toFixed(4));
+      // ব্যালেন্স ইনস্ট্যান্ট আপডেট করা (ETH & USDC)
+      if (provider && address) {
+          await fetchBalances(address, provider);
+      }
 
-      // 4. ৩ সেকেন্ড পর ব্যাকগ্রাউন্ডে ডেটা রিফ্রেশ করা (যাতে ব্লকচেইন নোড সিঙ্ক হওয়ার সময় পায়)
       setTimeout(() => {
           fetchCapsules();
       }, 3000);
@@ -380,7 +455,7 @@ export default function CapsulesPage() {
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
-            {/* Wallet Card */}
+            {/* Wallet Card - Updated with ETH & USDC */}
             <div className="mb-8 rounded-3xl bg-secondary p-6">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-4">
@@ -396,9 +471,16 @@ export default function CapsulesPage() {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-between rounded-2xl bg-background p-4 shadow-sm">
-                 <span className="text-sm font-bold text-muted-foreground">Balance</span>
-                 <span className="text-xl font-black text-foreground">{ethBalance} ETH</span>
+              <div className="flex flex-col gap-3 rounded-2xl bg-background p-4 shadow-sm">
+                 <span className="text-sm font-bold text-muted-foreground">Wallet Balances</span>
+                 <div className="flex justify-between items-center border-b border-border pb-2">
+                    <span className="text-xl font-black text-foreground">{ethBalance}</span>
+                    <span className="text-sm font-bold bg-secondary px-3 py-1 rounded-full text-foreground">ETH</span>
+                 </div>
+                 <div className="flex justify-between items-center pt-1">
+                    <span className="text-xl font-black text-blue-600">{usdcBalance}</span>
+                    <span className="text-sm font-bold bg-blue-50 px-3 py-1 rounded-full text-blue-600">USDC</span>
+                 </div>
               </div>
             </div>
 
@@ -432,7 +514,7 @@ export default function CapsulesPage() {
                     <CapsuleCard 
                       key={c.id} 
                       type="sent" 
-                      recipient={c.isRedPacket ? "Red Packet" : shortenAddress(c.recipient)} 
+                      recipient={c.isRedPacket ? c.recipient : shortenAddress(c.recipient)} 
                       amount={c.amount} 
                       token={c.token} 
                       unlockDate={c.unlockDate} 
@@ -479,7 +561,7 @@ export default function CapsulesPage() {
             ...selectedCapsule, 
             sender: selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || "") 
           }} 
-          onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received') ? handleClaim : undefined} 
+          onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received' && !selectedCapsule.isRedPacket) ? handleClaim : undefined} 
           isClaiming={isClaiming}
         />
       )}

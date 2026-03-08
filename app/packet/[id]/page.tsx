@@ -351,7 +351,7 @@ export default function RedPacketClaimPage() {
                                variant="secondary"
                                className="w-full rounded-full bg-white/20 hover:bg-white/30 text-white font-bold border border-white/30 backdrop-blur-md"
                             >
-                               Check Inbox <ArrowRight className="ml-2 h-4 w-4" />
+                               Check Capsule <ArrowRight className="ml-2 h-4 w-4" />
                             </Button>
                         </motion.div>
                     )}
