@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
@@ -8,14 +8,21 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Lock, Users, AlertCircle, Loader2, CheckCircle2, Gift, ArrowRight } from "lucide-react";
 import { ConfettiEffect } from "@/components/confetti-effect";
 
-// Web3 Imports (Wagmi)
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { ethers, BrowserProvider, Contract } from "ethers";
 import contractAbi from "@/contractAbi.json";
 
-// আপনার স্মার্ট কন্ট্রাক্ট অ্যাড্রেস
-const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
+// TypeScript-কে বলে দিচ্ছি যে window-এর ভেতর ethereum থাকতে পারে
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
 
-// Helper: Message Decode করা (Capsule পেজের মত)
+const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
+const BASE_SEPOLIA_ID = "0x14a34";
+const STORAGE_KEY = "yupp_wallet_connected";
+
+// Helper: Message Decode করা
 const parseGiftMessage = (rawMsg: string) => {
   try {
     const decoded = atob(rawMsg);
@@ -27,7 +34,7 @@ const parseGiftMessage = (rawMsg: string) => {
 };
 
 const shortenAddress = (addr: string) => {
-  if (!addr) return "Unknown";
+  if (!addr || !addr.startsWith("0x")) return "Unknown";
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
 
@@ -35,59 +42,106 @@ export default function RedPacketClaimPage() {
   const params = useParams();
   const router = useRouter();
   const packetId = params.id as string;
-  const { address, isConnected } = useAccount();
 
-  // টাইমার এবং UI স্টেট
+  // Wallet States
+  const [isConnected, setIsConnected] = useState(false);
+  const [address, setAddress] = useState("");
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [signer, setSigner] = useState<any>(null);
+
+  // Packet & UI States
+  const [packetData, setPacketData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [hasClaimed, setHasClaimed] = useState(false);
+  const [success, setSuccess] = useState(false);
+  
   const [timeLeft, setTimeLeft] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
-  const [success, setSuccess] = useState(false);
 
-  // 1. Contract থেকে প্যাকেট ডেটা রিড করা (প্রতি 5 সেকেন্ডে রিয়েল-টাইম আপডেট)
-  const { data: rawPacketData, isLoading: isReading } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: contractAbi,
-    functionName: "getRedPacketDetails", 
-    args: [BigInt(packetId || 0)],
-    query: {
-      refetchInterval: 5000, // Real-time sync
-    },
-  });
+  // --- Wallet Connection Logic ---
+  const setupWallet = async (acc: string, _provider: BrowserProvider) => {
+    const _signer = await _provider.getSigner();
+    const network = await _provider.getNetwork();
+    
+    // BigInt(84532) ব্যবহার করা হয়েছে যাতে TypeScript error না দেয়
+    if (network.chainId !== BigInt(84532)) {
+        try {
+            await window.ethereum.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: BASE_SEPOLIA_ID }],
+            });
+        } catch (e) { console.error(e); }
+    }
+    setProvider(_provider);
+    setSigner(_signer);
+    setAddress(acc);
+    setIsConnected(true);
+    localStorage.setItem(STORAGE_KEY, "true");
+  };
 
-  // 2. ইউজার অলরেডি ক্লেইম করেছে কিনা তা চেক করা
-  const { data: hasClaimed } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: contractAbi,
-    functionName: "hasClaimedRedPacket",
-    args: [BigInt(packetId || 0), address as `0x${string}`],
-    query: {
-      refetchInterval: 5000,
-      enabled: !!address, // Address থাকলে তবেই চেক করবে
-    },
-  });
+  const checkConnection = useCallback(async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+        const _provider = new BrowserProvider(window.ethereum);
+        const accounts = await _provider.send("eth_accounts", []);
+        if (accounts.length > 0) {
+            setupWallet(accounts[0], _provider);
+        }
+    } catch (e) { console.error("Silent connect error", e); }
+  }, []);
 
-  // 3. Contract এ Claim ফাংশন কল করা
-  const { data: hash, isPending: isClaiming, writeContractAsync } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
+  const handleConnect = async () => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    try {
+      const _provider = new BrowserProvider(window.ethereum);
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (accounts[0]) setupWallet(accounts[0], _provider);
+    } catch (error) {
+      console.error("Connection Failed", error);
+    }
+  };
 
-  // ডেটা পার্সিং (ABI এর Tuple ইনডেক্স অনুযায়ী)
-  const packetData = rawPacketData as any;
-  const rawSender = packetData?.[1] || "";
-  const remainingAmount = Number(packetData?.[4] || 0);
-  const totalClaimers = Number(packetData?.[5] || 0);
-  const remainingClaimers = Number(packetData?.[6] || 0);
-  const unlockTimestamp = Number(packetData?.[7] || 0) * 1000;
-  const isCancelled = packetData?.[10] || false;
-  const rawMessage = packetData?.[11] || "";
-
-  const claimedCount = totalClaimers - remainingClaimers;
-  const isEnded = remainingClaimers === 0 || remainingAmount === 0 || isCancelled;
-  
-  const parsedMsg = parseGiftMessage(rawMessage);
-  const displaySender = packetData?.[9] || parsedMsg.isAnonymous ? "Secret Sender" : shortenAddress(rawSender);
-
-  // টাইমার লজিক (Day + Hour + Min + Sec)
   useEffect(() => {
-    if (!unlockTimestamp) return;
+    if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
+  }, [checkConnection]);
+
+  // --- Fetch Red Packet Data ---
+  const fetchPacketData = useCallback(async () => {
+    if (!packetId) return;
+    
+    try {
+      const currentProvider = provider || (window.ethereum ? new BrowserProvider(window.ethereum) : null);
+      if (!currentProvider) {
+          setIsLoading(false);
+          return;
+      }
+
+      const contract = new Contract(CONTRACT_ADDRESS, contractAbi, currentProvider);
+      const data = await contract.getRedPacketDetails(packetId);
+      setPacketData(data);
+
+      if (address) {
+        const claimed = await contract.hasClaimedRedPacket(packetId, address);
+        setHasClaimed(claimed);
+      }
+    } catch (error) {
+      console.error("Failed to fetch packet", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [packetId, provider, address]);
+
+  useEffect(() => {
+    fetchPacketData();
+    const interval = setInterval(fetchPacketData, 5000); 
+    return () => clearInterval(interval);
+  }, [fetchPacketData]);
+
+  // --- Timer Logic ---
+  useEffect(() => {
+    if (!packetData) return;
+    const unlockTimestamp = Number(packetData[7]) * 1000;
 
     const timer = setInterval(() => {
       const now = Date.now();
@@ -104,14 +158,29 @@ export default function RedPacketClaimPage() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [unlockTimestamp]);
+  }, [packetData]);
 
-  // ট্রানজেকশন কনফার্মেশন ট্র্যাকিং
-  useEffect(() => {
-    if (isConfirmed) {
-      setSuccess(true);
+  // --- Claim Logic ---
+  const handleClaim = async () => {
+    if (!isConnected || !signer) {
+      handleConnect();
+      return;
     }
-  }, [isConfirmed]);
+    setIsClaiming(true);
+    try {
+      const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
+      const tx = await contract.claimRedPacket(packetId);
+      await tx.wait(); 
+      
+      setSuccess(true);
+      fetchPacketData(); 
+    } catch (error: any) {
+      console.error("Claim Failed:", error);
+      alert("Claim failed: " + (error.reason || error.message || "Unknown error"));
+    } finally {
+      setIsClaiming(false);
+    }
+  };
 
   const formatTime = (ms: number) => {
     const seconds = Math.floor((ms / 1000) % 60);
@@ -122,50 +191,52 @@ export default function RedPacketClaimPage() {
     return `${days > 0 ? `${days}d ` : ''}${hours.toString().padStart(2, '0')}h : ${minutes.toString().padStart(2, '0')}m : ${seconds.toString().padStart(2, '0')}s`;
   };
 
-  // ক্লেইম হ্যান্ডলার
-  const handleClaim = async () => {
-    if (!isConnected) {
-      alert("Please connect your wallet first!");
-      return;
-    }
-    try {
-      await writeContractAsync({
-        address: CONTRACT_ADDRESS,
-        abi: contractAbi,
-        functionName: "claimRedPacket", 
-        args: [BigInt(packetId)],
-      });
-    } catch (error: any) {
-      console.error("Claim Failed:", error);
-      // Optional: Handle "AlreadyClaimed" error UI
-    }
-  };
+  // --- Parsed Data ---
+  const rawSender = packetData?.[1] || "";
+  const remainingAmount = Number(packetData?.[4] || 0);
+  const totalClaimers = Number(packetData?.[5] || 0);
+  const remainingClaimers = Number(packetData?.[6] || 0);
+  const isCancelled = packetData?.[10] || false;
+  const rawMessage = packetData?.[11] || "";
+
+  const claimedCount = totalClaimers - remainingClaimers;
+  const isEnded = (remainingClaimers === 0 && totalClaimers > 0) || (remainingAmount === 0 && packetData) || isCancelled;
+  
+  const parsedMsg = parseGiftMessage(rawMessage);
+  const displaySender = packetData?.[9] || parsedMsg.isAnonymous ? "Secret Sender" : shortenAddress(rawSender);
 
   return (
     <div className="min-h-screen bg-background font-sans text-foreground flex flex-col relative overflow-hidden">
-      {/* Background decoration */}
       <div className="absolute top-0 inset-x-0 h-96 bg-gradient-to-b from-red-600/20 to-transparent pointer-events-none" />
       
-      <Header isConnected={isConnected} address={address || ""} onConnect={() => {}} onDisconnect={() => {}} />
+      <Header 
+        isConnected={isConnected} 
+        address={address || ""} 
+        onConnect={handleConnect} 
+        onDisconnect={() => {
+            setIsConnected(false);
+            setAddress("");
+            localStorage.removeItem(STORAGE_KEY);
+        }} 
+      />
+      
       <ConfettiEffect trigger={success} />
 
       <main className="flex-1 flex flex-col items-center justify-center p-6 relative z-10">
         
-        {isReading && !packetData ? (
+        {isLoading && !packetData ? (
           <div className="flex flex-col items-center justify-center space-y-4">
             <Loader2 className="h-10 w-10 animate-spin text-red-500" />
             <p className="text-muted-foreground font-medium animate-pulse">Scanning On-Chain Packet...</p>
           </div>
         ) : (
           <AnimatePresence>
-            {/* The Red Packet Envelope Design */}
             <motion.div 
                 initial={{ scale: 0.8, opacity: 0, y: 30 }} 
                 animate={{ scale: 1, opacity: 1, y: 0 }} 
                 transition={{ type: "spring", stiffness: 200, damping: 20 }}
                 className="w-full max-w-sm bg-gradient-to-b from-red-500 via-red-600 to-red-700 rounded-[2.5rem] p-8 text-center text-white shadow-[0_20px_50px_rgba(220,38,38,0.3)] relative overflow-hidden border border-red-400/30"
             >
-                {/* Envelope Flap Design Element */}
                 <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-white/10 to-transparent rounded-b-[50%] border-b border-white/10 shadow-sm"></div>
 
                 <div className="relative z-10 mt-4">
@@ -186,32 +257,28 @@ export default function RedPacketClaimPage() {
                     {!success ? (
                         <>
                             {hasClaimed ? (
-                                /* ইউজার অলরেডি ক্লেইম করে থাকলে */
                                 <div className="bg-white/10 rounded-3xl p-6 backdrop-blur-md border border-white/20">
                                     <CheckCircle2 className="mx-auto h-8 w-8 text-green-400 mb-2" />
                                     <p className="text-xl font-black text-white/90 uppercase tracking-wider mb-1">CLAIMED</p>
                                     <p className="text-sm text-green-100">You already got your share!</p>
                                 </div>
                             ) : isEnded ? (
-                                /* প্যাকেট শেষ হয়ে গেলে END মেসেজ */
                                 <div className="bg-black/40 rounded-3xl p-6 backdrop-blur-md border border-red-400/30">
                                     <AlertCircle className="mx-auto h-8 w-8 text-red-300 mb-2" />
                                     <p className="text-2xl font-black text-white/90 uppercase tracking-widest mb-1">ENDED</p>
                                     <p className="text-sm text-red-200">This packet is fully claimed.</p>
                                 </div>
                             ) : isUnlocked ? (
-                                /* প্যাকেট আনলক হলে ক্লেইম অপশন */
                                 <motion.div animate={{ y: [0, -5, 0] }} transition={{ repeat: Infinity, duration: 2 }}>
                                     <Button 
                                       onClick={handleClaim} 
-                                      disabled={isClaiming || isConfirming} 
+                                      disabled={isClaiming} 
                                       className="w-full h-16 rounded-full bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 disabled:opacity-70 text-red-950 text-xl font-black shadow-[0_10px_30px_rgba(253,224,71,0.3)] transition-all"
                                     >
-                                        {isConfirming ? "Confirming tx..." : isClaiming ? "Opening..." : "OPEN PACKET"}
+                                        {isClaiming ? "Opening..." : "OPEN PACKET"}
                                     </Button>
                                 </motion.div>
                             ) : (
-                                /* টাইমার (Day, Hour, Min, Sec) */
                                 <div className="bg-black/30 rounded-3xl p-6 backdrop-blur-md border border-white/10">
                                     <Lock className="mx-auto h-6 w-6 text-yellow-300 mb-2" />
                                     <p className="text-xs font-bold text-white/60 uppercase tracking-widest mb-2">Unlocks In</p>
@@ -241,8 +308,7 @@ export default function RedPacketClaimPage() {
           </AnimatePresence>
         )}
 
-        {/* Stats Below Envelope */}
-        {!isReading && packetData && (
+        {!isLoading && packetData && (
           <motion.div 
             initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
             className="w-full max-w-sm mt-8 flex justify-between px-6 py-4 bg-secondary/50 backdrop-blur-sm rounded-full border border-border shadow-sm text-sm font-bold text-muted-foreground"
