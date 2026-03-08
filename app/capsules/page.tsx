@@ -18,7 +18,6 @@ const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
 const BASE_SEPOLIA_ID = "0x14a34"; 
 const STORAGE_KEY = "yupp_wallet_connected";
 
-// আপনার প্রজেক্টের আসল USDC অ্যাড্রেসটি এখানে বসাতে পারেন। এটি Base Sepolia এর একটি কমন USDC অ্যাড্রেস
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"; 
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
@@ -31,11 +30,10 @@ const parseGiftMessage = (rawMsg: string) => {
     } catch (e) {
       return { content: rawMsg, isAnonymous: false };
     }
-  };
+};
   
 const shortenAddress = (addr: string) => {
   if (!addr || addr.length < 10) return addr;
-  // If it's a generic text like "Red Packet", don't shorten it
   if (!addr.startsWith("0x")) return addr; 
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
@@ -48,7 +46,6 @@ export default function CapsulesPage() {
   const [basename, setBasename] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
   
-  // Balances
   const [ethBalance, setEthBalance] = useState("0.00");
   const [usdcBalance, setUsdcBalance] = useState("0.00");
 
@@ -80,16 +77,16 @@ export default function CapsulesPage() {
     try {
         const _provider = new BrowserProvider(window.ethereum);
         const accounts = await _provider.send("eth_accounts", []);
-        if (accounts.length > 0) {
-            setupWallet(accounts[0], _provider);
-        }
+        if (accounts.length > 0) setupWallet(accounts[0], _provider);
     } catch (e) { console.error("Silent connect error", e); }
   }, []);
 
   const setupWallet = async (acc: string, _provider: BrowserProvider) => {
       const _signer = await _provider.getSigner();
       const network = await _provider.getNetwork();
-      if (network.chainId !== 84532n) {
+      
+      // Fixed BigInt literal issue for TS
+      if (Number(network.chainId) !== 84532) {
           try {
               await window.ethereum.request({
                   method: "wallet_switchEthereumChain",
@@ -121,9 +118,7 @@ export default function CapsulesPage() {
       const _provider = new BrowserProvider(window.ethereum);
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       if (accounts[0]) setupWallet(accounts[0], _provider);
-    } catch (error) {
-      console.error("Connection Failed", error);
-    }
+    } catch (error) { console.error("Connection Failed", error); }
   }, []);
 
   const confirmDisconnect = useCallback(() => {
@@ -165,166 +160,186 @@ export default function CapsulesPage() {
       // 1. Fetch Normal Gifts
       // ==========================================
       try {
-          const counter = await contract.giftCounter();
-          const totalGifts = Number(counter);
-          const promises = [];
-          for (let i = totalGifts; i >= 1; i--) promises.push(contract.getGiftDetails(i).catch(() => null));
+          const giftCounterFn = ["giftCounter", "totalGifts"].find(n => typeof contract[n] === "function");
+          const giftDetailsFn = ["getGiftDetails", "gifts", "getGift"].find(n => typeof contract[n] === "function");
           
-          const rawGifts = await Promise.all(promises);
-
-          rawGifts.forEach((gift: any) => {
-            if (!gift) return;
-            try {
-              const gId = gift.id || gift[0];
-              const gSender = (gift.creator || gift.from || gift.sender || gift[1] || "").toString();
-              const gRecipient = (gift.recipient || gift.to || gift[2] || "").toString();
-              const gTokenAddress = gift.tokenAddress || gift[3];
-              const gAmount = gift.amount || gift[4];
-              const gUnlockTime = gift.unlockTime || gift[5];
-              const gIsWithdrawn = gift.isWithdrawn ?? gift[6];
-              const gMessage = gift.message || gift[8] || "";
-
-              if (!gSender || !gRecipient) return;
-
-              const isSender = gSender.toLowerCase() === address.toLowerCase();
-              const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
-
-              if (!isSender && !isRecipient) return;
-
-              const { content, isAnonymous } = parseGiftMessage(gMessage);
-              const isEth = gTokenAddress === ethers.ZeroAddress;
-              const tokenSymbol = isEth ? "ETH" : "USDC";
-              const decimals = isEth ? 18 : 6; 
-              const formattedAmount = formatUnits(gAmount, decimals);
-              const unlockDate = new Date(Number(gUnlockTime) * 1000);
-              const isUnlocked = new Date() >= unlockDate;
+          if (giftCounterFn && giftDetailsFn) {
+              const counter = await contract[giftCounterFn]();
+              const totalGifts = Number(counter);
+              const promises = [];
+              for (let i = totalGifts; i >= 1; i--) promises.push(contract[giftDetailsFn](i).catch(() => null));
               
-              const baseCapsuleData = {
-                id: gId.toString(),
-                sender: gSender,
-                recipient: gRecipient,
-                amount: formattedAmount,
-                token: tokenSymbol,
-                unlockDate: unlockDate,
-                isUnlocked: isUnlocked,
-                isWithdrawn: gIsWithdrawn,
-                isAnonymous: isAnonymous,
-                message: content,
-                realMessage: content, 
-                txHash: "", 
-                nftTokenId: gId.toString(),
-                isRedPacket: false
-              };
+              const rawGifts = await Promise.all(promises);
 
-              if (isSender) sent.push(baseCapsuleData);
-              if (isRecipient) {
-                const receivedData = { ...baseCapsuleData };
-                if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
-                received.push(receivedData);
-              }
-            } catch (err) { console.error("Error processing regular gift", err); }
-          });
+              rawGifts.forEach((gift: any) => {
+                if (!gift) return;
+                try {
+                  const gId = gift.id ?? gift[0];
+                  const gSender = (gift.creator ?? gift.from ?? gift.sender ?? gift[1] ?? "").toString();
+                  const gRecipient = (gift.recipient ?? gift.to ?? gift[2] ?? "").toString();
+                  const gTokenAddress = gift.tokenAddress ?? gift.token ?? gift[3];
+                  
+                  const bigInts = Object.values(gift).filter(v => typeof v === 'bigint') as bigint[];
+                  // Fixed BigInt literal issue
+                  const gAmount = gift.amount ?? bigInts[0] ?? BigInt(0);
+                  const gUnlockTime = gift.unlockTime ?? gift.time ?? bigInts[1] ?? BigInt(0);
+                  const gIsWithdrawn = gift.isWithdrawn ?? gift.claimed ?? gift[6] ?? false;
+                  const gMessage = gift.message ?? gift.greeting ?? gift[8] ?? "";
+
+                  if (!gSender || !gRecipient) return;
+
+                  const isSender = gSender.toLowerCase() === address.toLowerCase();
+                  const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
+
+                  if (!isSender && !isRecipient) return;
+
+                  const { content, isAnonymous } = parseGiftMessage(gMessage);
+                  const isEth = (gTokenAddress.toString() === ethers.ZeroAddress);
+                  const tokenSymbol = isEth ? "ETH" : "USDC";
+                  const decimals = isEth ? 18 : 6; 
+                  const formattedAmount = formatUnits(gAmount, decimals);
+                  const unlockDate = new Date(Number(gUnlockTime) * 1000);
+                  const isUnlocked = new Date() >= unlockDate;
+                  
+                  const baseCapsuleData = {
+                    id: gId.toString(),
+                    sender: gSender,
+                    recipient: gRecipient,
+                    amount: formattedAmount,
+                    token: tokenSymbol,
+                    unlockDate: unlockDate,
+                    isUnlocked: isUnlocked,
+                    isWithdrawn: gIsWithdrawn,
+                    isAnonymous: isAnonymous,
+                    message: content,
+                    realMessage: content, 
+                    txHash: "", 
+                    isRedPacket: false
+                  };
+
+                  if (isSender) sent.push(baseCapsuleData);
+                  if (isRecipient) {
+                    const receivedData = { ...baseCapsuleData };
+                    if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
+                    received.push(receivedData);
+                  }
+                } catch (err) {}
+              });
+          }
       } catch (err) { console.error("Error fetching regular gifts", err); }
 
       // ==========================================
-      // 2. Fetch Red Packets (Sent + Claimed)
+      // 2. Fetch Red Packets (Sent + Accurate Claims)
       // ==========================================
       try {
-          if (contract.redPacketCounter && contract.getRedPacketDetails) {
-              const rpCounter = await contract.redPacketCounter();
+          const rpCounterFn = ["redPacketCounter", "packetCounter", "totalRedPackets", "redPacketIdCounter"].find(n => typeof contract[n] === "function");
+          const rpDetailsFn = ["getRedPacketDetails", "redPackets", "packetDetails", "getRedPacket"].find(n => typeof contract[n] === "function");
+
+          if (rpCounterFn && rpDetailsFn) {
+              const rpCounter = await contract[rpCounterFn]();
               const totalRPs = Number(rpCounter);
               
-              // ক্লেইম করা অ্যামাউন্ট বের করার জন্য ইভেন্ট লগ স্ক্যান করা হচ্ছে
               const myClaims: { [key: string]: bigint } = {};
               try {
-                  const currentBlock = await provider.getBlockNumber();
-                  const allLogs = await provider.getLogs({ 
-                      address: CONTRACT_ADDRESS, 
-                      fromBlock: Math.max(0, currentBlock - 500000), // Last 500k blocks
-                      toBlock: 'latest' 
-                  });
-                  
-                  allLogs.forEach((log) => {
-                      try {
-                          const parsed = contract.interface.parseLog({ topics: [...log.topics], data: log.data });
-                          if (parsed && parsed.name.toLowerCase().includes("claim")) {
-                              const argsArray = Array.from(parsed.args);
-                              // চেক করা হচ্ছে ক্লেইমার এই ইউজার কি না
-                              const isMyClaim = argsArray.some((a: any) => typeof a === 'string' && a.toLowerCase() === address.toLowerCase());
-                              if (isMyClaim) {
-                                  const pId = argsArray[0]?.toString();
-                                  const val = argsArray.find((a: any) => typeof a === 'bigint' && a > BigInt(10));
-                                  if (pId && val) myClaims[pId] = val;
+                  const claimEventName = Object.keys(contract.filters).find(n => n.toLowerCase().includes("claim"));
+
+                  if (claimEventName) {
+                      const currentBlock = await provider.getBlockNumber();
+                      const fromB = Math.max(0, currentBlock - 200000); 
+                      const rawLogs = await contract.queryFilter(contract.filters[claimEventName](), fromB, "latest");
+                      
+                      rawLogs.forEach(_log => {
+                          const log = _log as any; // Type override to fix "args" issue
+                          if (!log.args) return;
+                          
+                          const argsArr = Array.from(log.args);
+                          const claimer = argsArr.find(a => typeof a === 'string' && a.length === 42 && a.startsWith('0x'));
+                          
+                          // Fixed "toLowerCase" issue by casting to String
+                          if (claimer && String(claimer).toLowerCase() === address.toLowerCase()) {
+                              const bigInts = argsArr.filter((a): a is bigint => typeof a === 'bigint');
+                              if (bigInts.length >= 2) {
+                                  bigInts.sort((a, b) => (a > b ? 1 : a < b ? -1 : 0));
+                                  const pId = bigInts[0].toString(); 
+                                  const val = bigInts[bigInts.length - 1]; 
+                                  myClaims[pId] = val; 
                               }
                           }
-                      } catch(e) {} // Ignore parse errors
-                  });
-              } catch(e) { console.warn("Could not fetch claim logs", e); }
+                      });
+                  }
+              } catch(e) { console.warn("Log query issue (RPC too strict)", e); }
 
               const rpPromises = [];
-              for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
+              for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract[rpDetailsFn](i).catch(() => null));
               const rawRPs = await Promise.all(rpPromises);
 
-              rawRPs.forEach((rp: any) => {
+              rawRPs.forEach((rp: any, index: number) => {
                   if (!rp) return;
                   try {
-                      // Contract ABI return mapping based on RedPacket struct
-                      const rpId = (rp.id || rp[0]).toString();
-                      const rpSender = (rp.creator || rp.sender || rp[1] || "").toString();
-                      const rpTokenAddress = rp.tokenAddress || rp[2] || ethers.ZeroAddress;
-                      const rpTotalAmount = rp[3] || 0n;
-                      const rpRemainingAmount = rp[4] || 0n;
-                      const rpTotalClaimers = Number(rp[5] || 0);
-                      const rpRemainingClaimers = Number(rp[6] || 0);
-                      const rpUnlockTime = rp[7] || 0n;
-                      const rpIsCancelled = rp[10] || false;
-                      const rpMessage = rp[11] || rp.message || rp[8] || "";
+                      const fallbackId = (totalRPs - index).toString();
+                      const rpId = (rp.id ?? rp.packetId ?? rp[0] ?? fallbackId).toString();
+                      const rpSender = (rp.creator ?? rp.sender ?? rp[1] ?? "").toString();
+                      const rpTokenAddress = (rp.tokenAddress ?? rp.token ?? rp[2] ?? ethers.ZeroAddress).toString();
 
-                      if (!rpSender) return;
+                      const bigInts = Object.values(rp).filter(v => typeof v === 'bigint') as bigint[];
+                      let rpTotalAmount = rp.totalAmount ?? rp.amount ?? rp[3];
+                      let rpRemainingAmount = rp.remainingAmount ?? rp.balance ?? rp[4];
+                      
+                      // Fixed BigInt literal issues
+                      if (rpTotalAmount === undefined) rpTotalAmount = bigInts[0] ?? BigInt(0);
+                      if (rpRemainingAmount === undefined) rpRemainingAmount = bigInts[1] ?? BigInt(0);
+
+                      const rpTotalClaimers = Number(rp.totalClaimers ?? rp.numClaimers ?? rp[5] ?? 0);
+                      const rpRemainingClaimers = Number(rp.remainingClaimers ?? rp.balanceClaimers ?? rp[6] ?? 0);
+                      const rpUnlockTime = rp.unlockTime ?? rp.startTime ?? rp[7] ?? BigInt(0);
+                      const rpIsCancelled = rp.isCancelled ?? rp.cancelled ?? false;
+                      
+                      const strings = Object.values(rp).filter(v => typeof v === 'string') as string[];
+                      let rpMessage = rp.message ?? rp.greeting ?? rp[8];
+                      if (rpMessage === undefined) rpMessage = strings.find(s => !s.startsWith("0x") && s.length > 0) || "";
+
+                      if (!rpSender || rpSender === ethers.ZeroAddress) return;
 
                       const { content, isAnonymous } = parseGiftMessage(rpMessage);
                       const isEth = rpTokenAddress === ethers.ZeroAddress;
                       const tokenSymbol = isEth ? "ETH" : "USDC";
-                      const decimals = isEth ? 18 : 6; 
+                      const decimals = isEth ? 18 : 6;
                       
-                      // প্যাকেট কি শেষ হয়ে গেছে? (Amount 0 অথবা Claimers 0 অথবা Cancelled)
                       const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
                       const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
 
-                      // A. Sent Red Packets Check
                       if (rpSender.toLowerCase() === address.toLowerCase()) {
                           const formattedAmount = formatUnits(rpTotalAmount, decimals);
-                          
                           sent.push({
                               id: `rp-${rpId}`,
                               sender: rpSender,
                               recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
                               amount: formattedAmount,
                               token: tokenSymbol,
-                              unlockDate: new Date(Number(rpUnlockTime) * 1000),
+                              // Fixed BigInt comparison
+                              unlockDate: rpUnlockTime > BigInt(0) ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
                               isUnlocked: true,
-                              isWithdrawn: isEnded, // পুরোপুরি ক্লেইম হলে Withdrawn (Gray) দেখাবে
+                              isWithdrawn: isEnded, 
                               isAnonymous: isAnonymous,
                               message: content,
                               realMessage: content,
                               txHash: "",
                               isRedPacket: true
                           });
-                          
                       }
 
-                      // B. Received (Claimed) Red Packets Check
                       if (myClaims[rpId]) {
                           const claimedAmountExact = parseFloat(formatUnits(myClaims[rpId], decimals)).toFixed(4).replace(/\.0000$/, '');
                           received.push({
                               id: `rp-claim-${rpId}`,
                               sender: rpSender,
                               recipient: address,
-                              amount: claimedAmountExact, // ইভেন্ট থেকে পাওয়া সঠিক অ্যামাউন্ট
+                              amount: claimedAmountExact,
                               token: tokenSymbol,
-                              unlockDate: new Date(Number(rpUnlockTime) * 1000),
+                              // Fixed BigInt comparison
+                              unlockDate: rpUnlockTime > BigInt(0) ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
                               isUnlocked: true,
-                              isWithdrawn: true, // ইউজারের জন্য এটা অলরেডি ক্লেইমড
+                              isWithdrawn: true, 
                               isAnonymous: isAnonymous,
                               message: content,
                               realMessage: content,
@@ -332,10 +347,10 @@ export default function CapsulesPage() {
                               isRedPacket: true
                           });
                       }
-                  } catch (err) { console.error("Error processing red packet", err); }
+                  } catch (err) { console.error("Error processing red packet element", err); }
               });
           }
-      } catch (err) { console.warn("Red packet functions might not exist or differ in ABI names.", err); }
+      } catch (err) { console.warn("Red packet error", err); }
 
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
@@ -347,48 +362,32 @@ export default function CapsulesPage() {
     if (isConnected) fetchCapsules();
   }, [isConnected, fetchCapsules]);
 
-  // --- Auto Unlock Timer Logic ---
+  // --- Auto Unlock Timer ---
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
-
     const setupTimers = (capsules: any[], setCapsules: any) => {
       capsules.forEach((capsule) => {
         if (!capsule.isUnlocked && !capsule.isWithdrawn && capsule.unlockDate) {
-          const now = Date.now();
-          const unlockTime = new Date(capsule.unlockDate).getTime();
-          const timeUntilUnlock = unlockTime - now;
-
+          const timeUntilUnlock = new Date(capsule.unlockDate).getTime() - Date.now();
           if (timeUntilUnlock > 0 && timeUntilUnlock < 86400000) {
             const timerId = setTimeout(() => {
               setCapsules((currentCapsules: any[]) =>
-                currentCapsules.map((c) => {
-                  if (c.id === capsule.id) {
-                    return {
-                      ...c,
-                      isUnlocked: true,
-                      message: c.realMessage || c.message,
-                    };
-                  }
-                  return c;
-                })
+                currentCapsules.map((c) => c.id === capsule.id ? { ...c, isUnlocked: true, message: c.realMessage || c.message } : c)
               );
             }, timeUntilUnlock + 1000); 
-
             timers.push(timerId);
           }
         }
       });
     };
-
     setupTimers(myReceivedCapsules, setMyReceivedCapsules);
     setupTimers(mySentCapsules, setMySentCapsules);
-
     return () => timers.forEach(clearTimeout);
   }, [myReceivedCapsules, mySentCapsules]);
 
-  // --- Claim Logic (Updated for Instant UI Update & Balance Fetch) ---
+  // --- Claim Normal Gift ---
   const handleClaim = async () => {
-    if (!selectedCapsule || !signer) return;
+    if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
     setIsClaiming(true);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
@@ -398,22 +397,12 @@ export default function CapsulesPage() {
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
       
-      // Optimistic Update
-      setMyReceivedCapsules((prev) => 
-        prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c)
-      );
-
+      setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
       setSelectedCapsule(null); 
       setSuccessModalData({ amount: claimedAmount, token: claimedToken });
       
-      // ব্যালেন্স ইনস্ট্যান্ট আপডেট করা (ETH & USDC)
-      if (provider && address) {
-          await fetchBalances(address, provider);
-      }
-
-      setTimeout(() => {
-          fetchCapsules();
-      }, 3000);
+      if (provider && address) await fetchBalances(address, provider);
+      setTimeout(() => fetchCapsules(), 3000);
 
     } catch (error: any) { alert("Claim failed: " + (error.reason || error.message)); } 
     finally { setIsClaiming(false); }
@@ -425,23 +414,7 @@ export default function CapsulesPage() {
       await navigator.clipboard.writeText(address);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      const textArea = document.createElement("textarea");
-      textArea.value = address;
-      textArea.style.position = "fixed"; 
-      textArea.style.opacity = "0";
-      document.body.appendChild(textArea);
-      textArea.focus();
-      textArea.select();
-      try {
-        document.execCommand("copy");
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch (e) {
-        console.error("Fallback copy failed", e);
-      }
-      document.body.removeChild(textArea);
-    }
+    } catch (err) {}
   };
 
   const sentCapsules = mySentCapsules.filter(c => filter === "all" || c.token === filter);
@@ -455,7 +428,7 @@ export default function CapsulesPage() {
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
-            {/* Wallet Card - Updated with ETH & USDC */}
+            {/* Wallet Balances Card */}
             <div className="mb-8 rounded-3xl bg-secondary p-6">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-4">
@@ -539,7 +512,7 @@ export default function CapsulesPage() {
                       isWithdrawn={c.isWithdrawn} 
                       message={c.message} 
                       txHash={c.txHash} 
-                      onClaim={(c.isUnlocked && !c.isWithdrawn) ? () => setSelectedCapsule(c) : undefined} 
+                      onClaim={(c.isUnlocked && !c.isWithdrawn && !c.isRedPacket) ? () => setSelectedCapsule(c) : undefined} 
                       onClick={() => setSelectedCapsule(c)} 
                     />
                   )) : <EmptyState icon={<Inbox />} title="Inbox Empty" description="Share your address to receive gifts." />}
