@@ -277,14 +277,36 @@ export default function CreatePage() {
               amountWei, 
               maxClaimersBigInt, 
               unlockTimeBigInt, 
-              isLucky,            // bool _isRandom
-              isAnonymous,        // bool _isAnonymous (Added)
-              obfuscatedMessage,  // string _message
+              isLucky,            
+              isAnonymous,        
+              obfuscatedMessage,  
               txOptions
           );
-          await tx.wait();
           
-          setGeneratedLink(`${window.location.origin}/packet/${tx.hash.slice(0, 10)}`);
+          // 👇 এখানে আসল পরিবর্তন করা হয়েছে (Event থেকে ID বের করা)
+          const receipt = await tx.wait();
+          let newPacketId = "";
+
+          for (const log of receipt.logs) {
+              try {
+                  const parsedLog = giftContract.interface.parseLog({
+                      topics: [...log.topics],
+                      data: log.data
+                  });
+                  // স্মার্ট কন্ট্রাক্টের ইভেন্ট নামের মধ্যে 'Created' থাকলে সেটা ধরবে
+                  if (parsedLog && parsedLog.name.includes("Created")) {
+                      newPacketId = parsedLog.args[0].toString(); // ইভেন্টের প্রথম ডাটা (ID)
+                      break;
+                  }
+              } catch (e) {
+                 // অন্য কোনো লগ হলে ইগনোর করবে
+              }
+          }
+
+          // যদি ইভেন্ট থেকে আসল ID পাওয়া যায় তবে সেটা দিয়ে লিংক বানাবে, নাহলে ট্রানজেকশন হ্যাশ দিয়ে ফলব্যাক করবে
+          const finalId = newPacketId ? newPacketId : tx.hash.slice(0, 10);
+          
+          setGeneratedLink(`${window.location.origin}/packet/${finalId}`);
           setShowLinkModal(true);
       } else {
           tx = await giftContract.createGift(
@@ -292,8 +314,8 @@ export default function CreatePage() {
               tokenArg, 
               amountWei, 
               unlockTimeBigInt, 
-              isAnonymous,        // bool _isAnonymous (Added)
-              obfuscatedMessage,  // string _message
+              isAnonymous,        
+              obfuscatedMessage,  
               txOptions
           );
           await tx.wait();
@@ -486,21 +508,16 @@ export default function CreatePage() {
                     <h3 className="mb-2 text-2xl font-black text-foreground">Packet Ready!</h3>
                     <p className="mb-6 text-sm text-muted-foreground">Share this link with your friends. Anyone with the link can claim.</p>
                     
-                    {/* 👇 3. Link copy button fix করা হয়েছে */}
                     <div className="mb-6 flex items-center justify-between bg-secondary p-4 rounded-2xl border border-border overflow-hidden">
                         <span className="text-sm font-bold truncate mr-2 text-foreground">{generatedLink}</span>
                         <button onClick={() => navigator.clipboard.writeText(generatedLink)} className="p-2 bg-white text-black rounded-full shadow-sm hover:bg-gray-200 flex-shrink-0"><Copy className="h-4 w-4"/></button>
                     </div>
 
                     <div className="grid grid-cols-1 gap-3">
-                        {/* 👇 1. Share on X (Twitter) - White background, Black text */}
                         <Button className="rounded-xl font-bold bg-white text-black hover:bg-gray-100 h-12 border-none">Share on X (Twitter)</Button>
-                        
-                        {/* 👇 2. Post on Base - White background, Blue text */}
-<Button className="rounded-xl font-bold bg-black !text-[#0052FF] hover:bg-blue-50 h-12 border-none">
-  Post on Base App
-</Button>
-                        
+                        <Button className="rounded-xl font-bold bg-black !text-[#0052FF] hover:bg-blue-50 h-12 border-none">
+                          Post on Base App
+                        </Button>
                         <Button onClick={handleResetForm} variant="ghost" className="rounded-xl font-bold h-12 mt-2">Close</Button>
                     </div>
                 </motion.div>
