@@ -160,196 +160,171 @@ export default function CapsulesPage() {
       // 1. Fetch Normal Gifts
       // ==========================================
       try {
-          const giftCounterFn = ["giftCounter", "totalGifts"].find(n => typeof contract[n] === "function");
-          const giftDetailsFn = ["getGiftDetails", "gifts", "getGift"].find(n => typeof contract[n] === "function");
-          
-          if (giftCounterFn && giftDetailsFn) {
-              const counter = await contract[giftCounterFn]();
-              const totalGifts = Number(counter);
-              const promises = [];
-              for (let i = totalGifts; i >= 1; i--) promises.push(contract[giftDetailsFn](i).catch(() => null));
-              
-              const rawGifts = await Promise.all(promises);
-
-              rawGifts.forEach((gift: any) => {
-                if (!gift) return;
-                try {
-                  const gId = gift.id ?? gift[0];
-                  const gSender = (gift.creator ?? gift.from ?? gift.sender ?? gift[1] ?? "").toString();
-                  const gRecipient = (gift.recipient ?? gift.to ?? gift[2] ?? "").toString();
-                  const gTokenAddress = gift.tokenAddress ?? gift.token ?? gift[3];
-                  
-                  const bigInts = Object.values(gift).filter(v => typeof v === 'bigint') as bigint[];
-                  // Fixed BigInt literal issue
-                  const gAmount = gift.amount ?? bigInts[0] ?? BigInt(0);
-                  const gUnlockTime = gift.unlockTime ?? gift.time ?? bigInts[1] ?? BigInt(0);
-                  const gIsWithdrawn = gift.isWithdrawn ?? gift.claimed ?? gift[6] ?? false;
-                  const gMessage = gift.message ?? gift.greeting ?? gift[8] ?? "";
-
-                  if (!gSender || !gRecipient) return;
-
-                  const isSender = gSender.toLowerCase() === address.toLowerCase();
-                  const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
-
-                  if (!isSender && !isRecipient) return;
-
-                  const { content, isAnonymous } = parseGiftMessage(gMessage);
-                  const isEth = (gTokenAddress.toString() === ethers.ZeroAddress);
-                  const tokenSymbol = isEth ? "ETH" : "USDC";
-                  const decimals = isEth ? 18 : 6; 
-                  const formattedAmount = formatUnits(gAmount, decimals);
-                  const unlockDate = new Date(Number(gUnlockTime) * 1000);
-                  const isUnlocked = new Date() >= unlockDate;
-                  
-                  const baseCapsuleData = {
-                    id: gId.toString(),
-                    sender: gSender,
-                    recipient: gRecipient,
-                    amount: formattedAmount,
-                    token: tokenSymbol,
-                    unlockDate: unlockDate,
-                    isUnlocked: isUnlocked,
-                    isWithdrawn: gIsWithdrawn,
-                    isAnonymous: isAnonymous,
-                    message: content,
-                    realMessage: content, 
-                    txHash: "", 
-                    isRedPacket: false
-                  };
-
-                  if (isSender) sent.push(baseCapsuleData);
-                  if (isRecipient) {
-                    const receivedData = { ...baseCapsuleData };
-                    if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
-                    received.push(receivedData);
-                  }
-                } catch (err) {}
-              });
+          const totalGifts = Number(await contract.giftCounter());
+          const promises = [];
+          for (let i = totalGifts; i >= 1; i--) {
+              promises.push(contract.getGiftDetails(i).catch(() => null));
           }
+          
+          const rawGifts = await Promise.all(promises);
+
+          rawGifts.forEach((gift: any) => {
+            if (!gift) return;
+            try {
+              // ABI: id(0), sender(1), recipient(2), tokenAddress(3), amount(4), unlockTime(5), isAnonymous(6), isWithdrawn(7), isCancelled(8), message(9)
+              const gId = (gift.id ?? gift[0]).toString();
+              const gSender = (gift.sender ?? gift[1]).toString();
+              const gRecipient = (gift.recipient ?? gift[2]).toString();
+              const gTokenAddress = (gift.tokenAddress ?? gift[3]).toString();
+              const gAmount = gift.amount ?? gift[4];
+              const gUnlockTime = gift.unlockTime ?? gift[5];
+              const gIsAnonymous = gift.isAnonymous ?? gift[6];
+              const gIsWithdrawn = gift.isWithdrawn ?? gift[7];
+              const gMessage = gift.message ?? gift[9] ?? "";
+
+              if (!gSender || !gRecipient) return;
+
+              const isSender = gSender.toLowerCase() === address.toLowerCase();
+              const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
+
+              if (!isSender && !isRecipient) return;
+
+              const { content, isAnonymous } = parseGiftMessage(gMessage);
+              const isEth = (gTokenAddress === ethers.ZeroAddress);
+              const tokenSymbol = isEth ? "ETH" : "USDC";
+              const decimals = isEth ? 18 : 6; 
+              const formattedAmount = formatUnits(gAmount, decimals);
+              const unlockDate = new Date(Number(gUnlockTime) * 1000);
+              const isUnlocked = new Date() >= unlockDate;
+              
+              const baseCapsuleData = {
+                id: gId,
+                sender: gSender,
+                recipient: gRecipient,
+                amount: formattedAmount,
+                token: tokenSymbol,
+                unlockDate: unlockDate,
+                isUnlocked: isUnlocked,
+                isWithdrawn: gIsWithdrawn,
+                isAnonymous: isAnonymous || gIsAnonymous,
+                message: content,
+                realMessage: content, 
+                txHash: "", 
+                isRedPacket: false
+              };
+
+              if (isSender) sent.push(baseCapsuleData);
+              if (isRecipient) {
+                const receivedData = { ...baseCapsuleData };
+                if (!isUnlocked) receivedData.message = "🔒 Message is hidden until unlocked";
+                received.push(receivedData);
+              }
+            } catch (err) { console.error("Gift parse error", err); }
+          });
       } catch (err) { console.error("Error fetching regular gifts", err); }
 
       // ==========================================
       // 2. Fetch Red Packets (Sent + Accurate Claims)
       // ==========================================
       try {
-          const rpCounterFn = ["redPacketCounter", "packetCounter", "totalRedPackets", "redPacketIdCounter"].find(n => typeof contract[n] === "function");
-          const rpDetailsFn = ["getRedPacketDetails", "redPackets", "packetDetails", "getRedPacket"].find(n => typeof contract[n] === "function");
-
-          if (rpCounterFn && rpDetailsFn) {
-              const rpCounter = await contract[rpCounterFn]();
-              const totalRPs = Number(rpCounter);
+          const totalRPs = Number(await contract.redPacketCounter());
+          
+          // Fetch Claims (Only events where claimer is the current user)
+          const myClaims: { [key: string]: bigint } = {};
+          try {
+              const currentBlock = await provider.getBlockNumber();
+              const fromB = Math.max(0, currentBlock - 90000); // Prevents RPC limits while getting good history
               
-              const myClaims: { [key: string]: bigint } = {};
-              try {
-                  const claimEventName = Object.keys(contract.filters).find(n => n.toLowerCase().includes("claim"));
+              // Filter exactly by RedPacketClaimed(packetId, claimer, amount)
+              const claimFilter = contract.filters.RedPacketClaimed(null, address);
+              const rawLogs = await contract.queryFilter(claimFilter, fromB, "latest");
+              
+              rawLogs.forEach(_log => {
+                  const log = _log as any; 
+                  if (log.args) {
+                      const pId = log.args[0].toString(); // packetId
+                      const val = log.args[2];            // amount
+                      myClaims[pId] = val; 
+                  }
+              });
+          } catch(e) { console.warn("Log query issue (RPC limit reached)", e); }
 
-                  if (claimEventName) {
-                      const currentBlock = await provider.getBlockNumber();
-                      const fromB = Math.max(0, currentBlock - 200000); 
-                      const rawLogs = await contract.queryFilter(contract.filters[claimEventName](), fromB, "latest");
-                      
-                      rawLogs.forEach(_log => {
-                          const log = _log as any; // Type override to fix "args" issue
-                          if (!log.args) return;
-                          
-                          const argsArr = Array.from(log.args);
-                          const claimer = argsArr.find(a => typeof a === 'string' && a.length === 42 && a.startsWith('0x'));
-                          
-                          // Fixed "toLowerCase" issue by casting to String
-                          if (claimer && String(claimer).toLowerCase() === address.toLowerCase()) {
-                              const bigInts = argsArr.filter((a): a is bigint => typeof a === 'bigint');
-                              if (bigInts.length >= 2) {
-                                  bigInts.sort((a, b) => (a > b ? 1 : a < b ? -1 : 0));
-                                  const pId = bigInts[0].toString(); 
-                                  const val = bigInts[bigInts.length - 1]; 
-                                  myClaims[pId] = val; 
-                              }
-                          }
+          const rpPromises = [];
+          for (let i = totalRPs; i >= 1; i--) {
+              rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
+          }
+          const rawRPs = await Promise.all(rpPromises);
+
+          rawRPs.forEach((rp: any) => {
+              if (!rp) return;
+              try {
+                  // ABI: id(0), sender(1), tokenAddress(2), totalAmount(3), remainingAmount(4), totalClaimers(5), remainingClaimers(6), unlockTime(7), isRandom(8), isAnonymous(9), isCancelled(10), message(11)
+                  const rpId = (rp.id ?? rp[0]).toString();
+                  const rpSender = (rp.sender ?? rp[1]).toString();
+                  const rpTokenAddress = (rp.tokenAddress ?? rp[2]).toString();
+                  const rpTotalAmount = rp.totalAmount ?? rp[3];
+                  const rpRemainingAmount = rp.remainingAmount ?? rp[4];
+                  const rpTotalClaimers = Number(rp.totalClaimers ?? rp[5]);
+                  const rpRemainingClaimers = Number(rp.remainingClaimers ?? rp[6]);
+                  const rpUnlockTime = rp.unlockTime ?? rp[7];
+                  const rpIsAnonymous = rp.isAnonymous ?? rp[9];
+                  const rpIsCancelled = rp.isCancelled ?? rp[10];
+                  const rpMessage = rp.message ?? rp[11] ?? "";
+
+                  if (!rpSender || rpSender === ethers.ZeroAddress) return;
+
+                  const { content, isAnonymous } = parseGiftMessage(rpMessage);
+                  const isEth = rpTokenAddress === ethers.ZeroAddress;
+                  const tokenSymbol = isEth ? "ETH" : "USDC";
+                  const decimals = isEth ? 18 : 6;
+                  
+                  const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
+                  const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
+
+                  // === For Sent Tab ===
+                  if (rpSender.toLowerCase() === address.toLowerCase()) {
+                      const formattedAmount = formatUnits(rpTotalAmount, decimals);
+                      sent.push({
+                          id: `rp-${rpId}`,
+                          sender: rpSender,
+                          recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
+                          amount: formattedAmount,
+                          token: tokenSymbol,
+                          unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
+                          isUnlocked: true,
+                          isWithdrawn: isEnded, 
+                          isAnonymous: isAnonymous || rpIsAnonymous,
+                          message: content,
+                          realMessage: content,
+                          txHash: "",
+                          isRedPacket: true
                       });
                   }
-              } catch(e) { console.warn("Log query issue (RPC too strict)", e); }
 
-              const rpPromises = [];
-              for (let i = totalRPs; i >= 1; i--) rpPromises.push(contract[rpDetailsFn](i).catch(() => null));
-              const rawRPs = await Promise.all(rpPromises);
-
-              rawRPs.forEach((rp: any, index: number) => {
-                  if (!rp) return;
-                  try {
-                      const fallbackId = (totalRPs - index).toString();
-                      const rpId = (rp.id ?? rp.packetId ?? rp[0] ?? fallbackId).toString();
-                      const rpSender = (rp.creator ?? rp.sender ?? rp[1] ?? "").toString();
-                      const rpTokenAddress = (rp.tokenAddress ?? rp.token ?? rp[2] ?? ethers.ZeroAddress).toString();
-
-                      const bigInts = Object.values(rp).filter(v => typeof v === 'bigint') as bigint[];
-                      let rpTotalAmount = rp.totalAmount ?? rp.amount ?? rp[3];
-                      let rpRemainingAmount = rp.remainingAmount ?? rp.balance ?? rp[4];
+                  // === For Received Tab (Claimed Red Packets) ===
+                  if (myClaims[rpId]) {
+                      // Formatting string securely to avoid extra zeros
+                      const claimedAmountStr = formatUnits(myClaims[rpId], decimals);
+                      const claimedAmountExact = parseFloat(claimedAmountStr).toFixed(4).replace(/\.?0+$/, '');
                       
-                      // Fixed BigInt literal issues
-                      if (rpTotalAmount === undefined) rpTotalAmount = bigInts[0] ?? BigInt(0);
-                      if (rpRemainingAmount === undefined) rpRemainingAmount = bigInts[1] ?? BigInt(0);
-
-                      const rpTotalClaimers = Number(rp.totalClaimers ?? rp.numClaimers ?? rp[5] ?? 0);
-                      const rpRemainingClaimers = Number(rp.remainingClaimers ?? rp.balanceClaimers ?? rp[6] ?? 0);
-                      const rpUnlockTime = rp.unlockTime ?? rp.startTime ?? rp[7] ?? BigInt(0);
-                      const rpIsCancelled = rp.isCancelled ?? rp.cancelled ?? false;
-                      
-                      const strings = Object.values(rp).filter(v => typeof v === 'string') as string[];
-                      let rpMessage = rp.message ?? rp.greeting ?? rp[8];
-                      if (rpMessage === undefined) rpMessage = strings.find(s => !s.startsWith("0x") && s.length > 0) || "";
-
-                      if (!rpSender || rpSender === ethers.ZeroAddress) return;
-
-                      const { content, isAnonymous } = parseGiftMessage(rpMessage);
-                      const isEth = rpTokenAddress === ethers.ZeroAddress;
-                      const tokenSymbol = isEth ? "ETH" : "USDC";
-                      const decimals = isEth ? 18 : 6;
-                      
-                      const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
-                      const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
-
-                      if (rpSender.toLowerCase() === address.toLowerCase()) {
-                          const formattedAmount = formatUnits(rpTotalAmount, decimals);
-                          sent.push({
-                              id: `rp-${rpId}`,
-                              sender: rpSender,
-                              recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
-                              amount: formattedAmount,
-                              token: tokenSymbol,
-                              // Fixed BigInt comparison
-                              unlockDate: rpUnlockTime > BigInt(0) ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
-                              isUnlocked: true,
-                              isWithdrawn: isEnded, 
-                              isAnonymous: isAnonymous,
-                              message: content,
-                              realMessage: content,
-                              txHash: "",
-                              isRedPacket: true
-                          });
-                      }
-
-                      if (myClaims[rpId]) {
-                          const claimedAmountExact = parseFloat(formatUnits(myClaims[rpId], decimals)).toFixed(4).replace(/\.0000$/, '');
-                          received.push({
-                              id: `rp-claim-${rpId}`,
-                              sender: rpSender,
-                              recipient: address,
-                              amount: claimedAmountExact,
-                              token: tokenSymbol,
-                              // Fixed BigInt comparison
-                              unlockDate: rpUnlockTime > BigInt(0) ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
-                              isUnlocked: true,
-                              isWithdrawn: true, 
-                              isAnonymous: isAnonymous,
-                              message: content,
-                              realMessage: content,
-                              txHash: "",
-                              isRedPacket: true
-                          });
-                      }
-                  } catch (err) { console.error("Error processing red packet element", err); }
-              });
-          }
+                      received.push({
+                          id: `rp-claim-${rpId}`,
+                          sender: rpSender,
+                          recipient: address,
+                          amount: claimedAmountExact || claimedAmountStr,
+                          token: tokenSymbol,
+                          unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
+                          isUnlocked: true,
+                          isWithdrawn: true, 
+                          isAnonymous: isAnonymous || rpIsAnonymous,
+                          message: content,
+                          realMessage: content,
+                          txHash: "",
+                          isRedPacket: true
+                      });
+                  }
+              } catch (err) { console.error("Error processing red packet element", err); }
+          });
       } catch (err) { console.warn("Red packet error", err); }
 
       setMySentCapsules(sent);
@@ -357,10 +332,6 @@ export default function CapsulesPage() {
     } catch (error) { console.error("Fetch Error:", error); } 
     finally { setIsLoadingData(false); }
   }, [provider, address]);
-
-  useEffect(() => {
-    if (isConnected) fetchCapsules();
-  }, [isConnected, fetchCapsules]);
 
   // --- Auto Unlock Timer ---
   useEffect(() => {
