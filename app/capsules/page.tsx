@@ -475,7 +475,11 @@ export default function CapsulesPage() {
                     <CapsuleCard 
                       key={c.id} 
                       type="received" 
-                      sender={c.isAnonymous ? "Secret Sender" : shortenAddress(c.sender)} 
+                      sender={
+                        c.isRedPacket 
+                          ? `🧧 Red Packet from ${c.isAnonymous ? "Secret" : shortenAddress(c.sender)}` 
+                          : (c.isAnonymous ? "Secret Sender" : shortenAddress(c.sender))
+                      } 
                       amount={c.amount} 
                       token={c.token} 
                       unlockDate={c.unlockDate} 
@@ -503,7 +507,9 @@ export default function CapsulesPage() {
           type="detail" 
           gift={{ 
             ...selectedCapsule, 
-            sender: selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || "") 
+            sender: selectedCapsule.isRedPacket
+              ? `🧧 Red Packet from ${selectedCapsule.isAnonymous ? "Secret" : shortenAddress(selectedCapsule.sender || "")}`
+              : (selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || ""))
           }} 
           onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received' && !selectedCapsule.isRedPacket) ? handleClaim : undefined} 
           isClaiming={isClaiming}
