@@ -56,6 +56,10 @@ export default function RedPacketClaimPage() {
   const [hasClaimed, setHasClaimed] = useState(false);
   const [success, setSuccess] = useState(false);
   
+  // New States for Claimed Amount Show
+  const [claimedAmount, setClaimedAmount] = useState<string>("");
+  const [claimedSymbol, setClaimedSymbol] = useState<string>("ETH");
+
   const [timeLeft, setTimeLeft] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
 
@@ -64,7 +68,6 @@ export default function RedPacketClaimPage() {
     const _signer = await _provider.getSigner();
     const network = await _provider.getNetwork();
     
-    // BigInt(84532) ব্যবহার করা হয়েছে যাতে TypeScript error না দেয়
     if (network.chainId !== BigInt(84532)) {
         try {
             await window.ethereum.request({
@@ -138,29 +141,37 @@ export default function RedPacketClaimPage() {
     return () => clearInterval(interval);
   }, [fetchPacketData]);
 
-  // --- Timer Logic ---
+  // --- Timer Logic (Fixed for 00:00:00 bug) ---
   useEffect(() => {
     if (!packetData) return;
     const unlockTimestamp = Number(packetData[7]) * 1000;
 
-    const timer = setInterval(() => {
+    const updateTimer = () => {
       const now = Date.now();
       const remaining = unlockTimestamp - now;
 
       if (remaining <= 0) {
         setIsUnlocked(true);
         setTimeLeft(0);
-        clearInterval(timer);
+        return true; // Stop interval
       } else {
         setIsUnlocked(false);
         setTimeLeft(remaining);
+        return false; // Continue interval
       }
+    };
+
+    // Initial check
+    if (updateTimer()) return;
+
+    const timer = setInterval(() => {
+      if (updateTimer()) clearInterval(timer);
     }, 1000);
 
     return () => clearInterval(timer);
   }, [packetData]);
 
-  // --- Claim Logic ---
+  // --- Claim Logic (Added Log Parsing for Amount) ---
   const handleClaim = async () => {
     if (!isConnected || !signer) {
       handleConnect();
@@ -170,7 +181,39 @@ export default function RedPacketClaimPage() {
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
       const tx = await contract.claimRedPacket(packetId);
-      await tx.wait(); 
+      const receipt = await tx.wait(); 
+      
+      // Token & Amount Detect Logic
+      const tokenAddress = packetData?.[2];
+      const isUSDC = tokenAddress && tokenAddress !== ethers.ZeroAddress;
+      const decimals = isUSDC ? 6 : 18;
+      const symbol = isUSDC ? "USDC" : "ETH";
+      
+      let extractedAmount = "";
+
+      // Transaction Event Log থেকে Claim করা Amount বের করা হচ্ছে
+      for (const log of receipt.logs) {
+          try {
+              const parsedLog = contract.interface.parseLog({ topics: [...log.topics], data: log.data });
+              // যদি Event এর নাম Claim রিলেটেড হয়
+              if (parsedLog && parsedLog.name.toLowerCase().includes("claim")) {
+                  // Event থেকে এমাউন্টের ভ্যালুটি খোঁজা হচ্ছে - এখানেই 10n এরর তৈরি করছিল
+                  const val = parsedLog.args.find((a: any) => typeof a === 'bigint' && a > BigInt(10));
+                  if (val) {
+                      const formatted = ethers.formatUnits(val, decimals);
+                      extractedAmount = parseFloat(formatted).toFixed(4).replace(/\.0000$/, ''); // Clean zeros
+                      break;
+                  }
+              }
+          } catch (e) {
+             // অন্য লগের এরর ইগনোর করবে
+          }
+      }
+
+      if (extractedAmount) {
+          setClaimedAmount(extractedAmount);
+          setClaimedSymbol(symbol);
+      }
       
       setSuccess(true);
       fetchPacketData(); 
@@ -292,7 +335,16 @@ export default function RedPacketClaimPage() {
                               <Gift className="h-8 w-8 text-yellow-300" />
                             </div>
                             <h1 className="text-2xl font-black text-yellow-300 drop-shadow-md mb-2">Successfully Claimed!</h1>
-                            <p className="text-red-100 text-sm mb-6">Funds have been added to your balance.</p>
+                            
+                            {/* 👇 Amount Show Section (UI design kept identical) */}
+                            {claimedAmount ? (
+                                <div className="bg-black/20 rounded-2xl p-4 mb-6 backdrop-blur-md border border-white/10 shadow-inner">
+                                    <p className="text-sm text-yellow-100/70 uppercase tracking-widest mb-1 font-bold">You Received</p>
+                                    <p className="text-4xl font-black text-white drop-shadow-sm">{claimedAmount} <span className="text-xl text-yellow-400">{claimedSymbol}</span></p>
+                                </div>
+                            ) : (
+                                <p className="text-red-100 text-sm mb-6">Funds have been added to your balance.</p>
+                            )}
                             
                             <Button 
                                onClick={() => router.push('/capsules')} 
