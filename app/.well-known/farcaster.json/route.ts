@@ -9,7 +9,7 @@ export async function GET() {
     },
     "miniapp": {
       "version": "1",
-      "name": "CryptoGift Capsule",
+      "name": "Base Capsule",
       "homeUrl": "https://basecapsule.space",
       "iconUrl": "https://basecapsule.space/placeholder-logo.png",
       "splashImageUrl": "https://basecapsule.space/placeholder-logo.png",
