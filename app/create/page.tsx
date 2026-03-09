@@ -16,11 +16,11 @@ import { motion, AnimatePresence } from "framer-motion";
 // NEW ABI 
 import contractAbi from "@/contractAbi.json";
 
-// New Smart Contract Address
-const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
-const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
-const CHAIN_ID_HEX = "0x14a34"; 
-const CHAIN_ID_DECIMAL = 84532;
+// Updated for Base Mainnet
+const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
+const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // Base Mainnet USDC
+const CHAIN_ID_HEX = "0x2105"; 
+const CHAIN_ID_DECIMAL = 8453;
 const STORAGE_KEY = "yupp_wallet_connected";
 const ETH_PRESETS = ["0.001", "0.01", "0.05", "0.1", "0.5"];
 const USDC_PRESETS = ["5", "10", "20", "50", "100"];
@@ -231,7 +231,7 @@ export default function CreatePage() {
     if (!validate()) return;
     if (!signer) { connect(); return; }
     const correctChain = await ensureChain();
-    if (!correctChain) { setErrors({ submit: "Wrong network. Switch to Base Sepolia." }); return; }
+    if (!correctChain) { setErrors({ submit: "Wrong network. Switch to Base Mainnet." }); return; }
 
     try {
       setLoadingStep("IDLE");
@@ -283,7 +283,6 @@ export default function CreatePage() {
               txOptions
           );
           
-          // 👇 এখানে আসল পরিবর্তন করা হয়েছে (Event থেকে ID বের করা)
           const receipt = await tx.wait();
           let newPacketId = "";
 
@@ -293,17 +292,15 @@ export default function CreatePage() {
                       topics: [...log.topics],
                       data: log.data
                   });
-                  // স্মার্ট কন্ট্রাক্টের ইভেন্ট নামের মধ্যে 'Created' থাকলে সেটা ধরবে
                   if (parsedLog && parsedLog.name.includes("Created")) {
-                      newPacketId = parsedLog.args[0].toString(); // ইভেন্টের প্রথম ডাটা (ID)
+                      newPacketId = parsedLog.args[0].toString();
                       break;
                   }
               } catch (e) {
-                 // অন্য কোনো লগ হলে ইগনোর করবে
+                 // Ignore unsupported logs
               }
           }
 
-          // যদি ইভেন্ট থেকে আসল ID পাওয়া যায় তবে সেটা দিয়ে লিংক বানাবে, নাহলে ট্রানজেকশন হ্যাশ দিয়ে ফলব্যাক করবে
           const finalId = newPacketId ? newPacketId : tx.hash.slice(0, 10);
           
           setGeneratedLink(`${window.location.origin}/packet/${finalId}`);

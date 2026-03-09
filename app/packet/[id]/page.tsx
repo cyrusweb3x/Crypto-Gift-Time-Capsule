@@ -19,8 +19,9 @@ declare global {
   }
 }
 
-const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
-const BASE_SEPOLIA_ID = "0x14a34";
+// Updated for Base Mainnet
+const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
+const BASE_CHAIN_ID = "0x2105"; // 8453
 const STORAGE_KEY = "yupp_wallet_connected";
 
 const parseGiftMessage = (rawMsg: string) => {
@@ -64,11 +65,11 @@ export default function RedPacketClaimPage() {
     const _signer = await _provider.getSigner();
     const network = await _provider.getNetwork();
     
-    if (network.chainId !== BigInt(84532)) {
+    if (network.chainId !== BigInt(8453)) {
         try {
             await window.ethereum.request({
                 method: "wallet_switchEthereumChain",
-                params: [{ chainId: BASE_SEPOLIA_ID }],
+                params: [{ chainId: BASE_CHAIN_ID }],
             });
         } catch (e) { console.error(e); }
     }
@@ -164,7 +165,6 @@ export default function RedPacketClaimPage() {
     return () => clearInterval(timer);
   }, [packetData]);
 
-  // FIXED: Accurate Event Parsing for Claim Amount
   const handleClaim = async () => {
     if (!isConnected || !signer) {
       handleConnect();
@@ -188,7 +188,6 @@ export default function RedPacketClaimPage() {
               const parsedLog = contract.interface.parseLog({ topics: [...log.topics], data: log.data });
               // Check specifically for RedPacketClaimed Event
               if (parsedLog && parsedLog.name === "RedPacketClaimed") {
-                  // ABI: RedPacketClaimed(packetId, claimer, amount) -> amount is at index 2
                   const amountValue = parsedLog.args[2]; 
                   if (amountValue) {
                       const formatted = ethers.formatUnits(amountValue, decimals);
@@ -197,7 +196,7 @@ export default function RedPacketClaimPage() {
                   }
               }
           } catch (e) {
-             // Ignore logs that don't match our ABI
+             // Ignore logs
           }
       }
 
@@ -205,7 +204,6 @@ export default function RedPacketClaimPage() {
           setClaimedAmount(extractedAmount);
           setClaimedSymbol(symbol);
       } else {
-          // Fallback if event parsing fails but tx succeeds
           setClaimedAmount("Success");
           setClaimedSymbol(symbol);
       }

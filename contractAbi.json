@@ -1,12 +1,17 @@
 [
 	{
 		"inputs": [],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"inputs": [],
 		"name": "AlreadyClaimed",
 		"type": "error"
 	},
 	{
 		"inputs": [],
-		"name": "AlreadyWithdrawn",
+		"name": "AlreadyProcessed",
 		"type": "error"
 	},
 	{
@@ -30,19 +35,6 @@
 				"type": "uint256"
 			}
 		],
-		"name": "cancelRedPacket",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint256",
-				"name": "_packetId",
-				"type": "uint256"
-			}
-		],
 		"name": "claimRedPacket",
 		"outputs": [],
 		"stateMutability": "nonpayable",
@@ -51,9 +43,9 @@
 	{
 		"inputs": [
 			{
-				"internalType": "address",
-				"name": "_recipient",
-				"type": "address"
+				"internalType": "enum CryptoGiftCapsuleV5.AssetType",
+				"name": "_assetType",
+				"type": "uint8"
 			},
 			{
 				"internalType": "address",
@@ -62,8 +54,18 @@
 			},
 			{
 				"internalType": "uint256",
+				"name": "_tokenId",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
 				"name": "_amount",
 				"type": "uint256"
+			},
+			{
+				"internalType": "address",
+				"name": "_recipient",
+				"type": "address"
 			},
 			{
 				"internalType": "uint256",
@@ -131,7 +133,12 @@
 	},
 	{
 		"inputs": [],
-		"name": "EtherTransferFailed",
+		"name": "EnforcedPause",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "ExpectedPause",
 		"type": "error"
 	},
 	{
@@ -181,13 +188,129 @@
 		"type": "error"
 	},
 	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "",
+				"type": "uint256[]"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "",
+				"type": "uint256[]"
+			},
+			{
+				"internalType": "bytes",
+				"name": "",
+				"type": "bytes"
+			}
+		],
+		"name": "onERC1155BatchReceived",
+		"outputs": [
+			{
+				"internalType": "bytes4",
+				"name": "",
+				"type": "bytes4"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bytes",
+				"name": "",
+				"type": "bytes"
+			}
+		],
+		"name": "onERC1155Received",
+		"outputs": [
+			{
+				"internalType": "bytes4",
+				"name": "",
+				"type": "bytes4"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "OnlyFungibleAllowed",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "owner",
+				"type": "address"
+			}
+		],
+		"name": "OwnableInvalidOwner",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			}
+		],
+		"name": "OwnableUnauthorizedAccount",
+		"type": "error"
+	},
+	{
 		"inputs": [],
 		"name": "PacketEmpty",
 		"type": "error"
 	},
 	{
 		"inputs": [],
-		"name": "TokenTransferFailed",
+		"name": "ReentrancyGuardReentrantCall",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			}
+		],
+		"name": "SafeERC20FailedOperation",
 		"type": "error"
 	},
 	{
@@ -200,29 +323,10 @@
 				"type": "uint256"
 			},
 			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "sender",
-				"type": "address"
-			},
-			{
 				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
-		],
-		"name": "GiftCancelled",
-		"type": "event"
-	},
-	{
-		"anonymous": false,
-		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "uint256",
-				"name": "giftId",
-				"type": "uint256"
+				"internalType": "enum CryptoGiftCapsuleV5.AssetType",
+				"name": "assetType",
+				"type": "uint8"
 			},
 			{
 				"indexed": true,
@@ -245,20 +349,14 @@
 			{
 				"indexed": false,
 				"internalType": "uint256",
-				"name": "amount",
+				"name": "tokenId",
 				"type": "uint256"
 			},
 			{
 				"indexed": false,
 				"internalType": "uint256",
-				"name": "unlockTime",
+				"name": "amount",
 				"type": "uint256"
-			},
-			{
-				"indexed": false,
-				"internalType": "bool",
-				"name": "isAnonymous",
-				"type": "bool"
 			}
 		],
 		"name": "GiftCreated",
@@ -274,69 +372,92 @@
 				"type": "uint256"
 			},
 			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "newUnlockTime",
-				"type": "uint256"
+				"indexed": true,
+				"internalType": "address",
+				"name": "processor",
+				"type": "address"
 			},
 			{
 				"indexed": false,
-				"internalType": "bool",
-				"name": "isAnonymous",
-				"type": "bool"
+				"internalType": "string",
+				"name": "actionType",
+				"type": "string"
 			}
 		],
-		"name": "GiftUpdated",
+		"name": "GiftProcessed",
 		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bytes",
+				"name": "",
+				"type": "bytes"
+			}
+		],
+		"name": "onERC721Received",
+		"outputs": [
+			{
+				"internalType": "bytes4",
+				"name": "",
+				"type": "bytes4"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
 			{
 				"indexed": true,
-				"internalType": "uint256",
-				"name": "giftId",
-				"type": "uint256"
+				"internalType": "address",
+				"name": "previousOwner",
+				"type": "address"
 			},
 			{
 				"indexed": true,
 				"internalType": "address",
-				"name": "recipient",
+				"name": "newOwner",
 				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
 			}
 		],
-		"name": "GiftWithdrawn",
+		"name": "OwnershipTransferred",
 		"type": "event"
+	},
+	{
+		"inputs": [],
+		"name": "pause",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
 			{
-				"indexed": true,
-				"internalType": "uint256",
-				"name": "packetId",
-				"type": "uint256"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "sender",
-				"type": "address"
-			},
-			{
 				"indexed": false,
-				"internalType": "uint256",
-				"name": "refundedAmount",
-				"type": "uint256"
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
 			}
 		],
-		"name": "RedPacketCancelled",
+		"name": "Paused",
 		"type": "event"
 	},
 	{
@@ -402,93 +523,50 @@
 				"internalType": "bool",
 				"name": "isRandom",
 				"type": "bool"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "unlockTime",
-				"type": "uint256"
-			},
-			{
-				"indexed": false,
-				"internalType": "bool",
-				"name": "isAnonymous",
-				"type": "bool"
 			}
 		],
 		"name": "RedPacketCreated",
 		"type": "event"
 	},
 	{
+		"inputs": [],
+		"name": "renounceOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "newOwner",
+				"type": "address"
+			}
+		],
+		"name": "transferOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "unpause",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
 		"anonymous": false,
 		"inputs": [
 			{
-				"indexed": true,
-				"internalType": "uint256",
-				"name": "packetId",
-				"type": "uint256"
-			},
-			{
 				"indexed": false,
-				"internalType": "uint256",
-				"name": "newUnlockTime",
-				"type": "uint256"
-			},
-			{
-				"indexed": false,
-				"internalType": "bool",
-				"name": "isAnonymous",
-				"type": "bool"
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
 			}
 		],
-		"name": "RedPacketUpdated",
+		"name": "Unpaused",
 		"type": "event"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint256",
-				"name": "_giftId",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_newUnlockTime",
-				"type": "uint256"
-			},
-			{
-				"internalType": "bool",
-				"name": "_isAnonymous",
-				"type": "bool"
-			}
-		],
-		"name": "updateGift",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint256",
-				"name": "_packetId",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_newUnlockTime",
-				"type": "uint256"
-			},
-			{
-				"internalType": "bool",
-				"name": "_isAnonymous",
-				"type": "bool"
-			}
-		],
-		"name": "updateRedPacket",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
 	},
 	{
 		"inputs": [
@@ -506,158 +584,6 @@
 	{
 		"stateMutability": "payable",
 		"type": "receive"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint256",
-				"name": "_giftId",
-				"type": "uint256"
-			}
-		],
-		"name": "getGiftDetails",
-		"outputs": [
-			{
-				"components": [
-					{
-						"internalType": "uint256",
-						"name": "id",
-						"type": "uint256"
-					},
-					{
-						"internalType": "address",
-						"name": "sender",
-						"type": "address"
-					},
-					{
-						"internalType": "address",
-						"name": "recipient",
-						"type": "address"
-					},
-					{
-						"internalType": "address",
-						"name": "tokenAddress",
-						"type": "address"
-					},
-					{
-						"internalType": "uint256",
-						"name": "amount",
-						"type": "uint256"
-					},
-					{
-						"internalType": "uint256",
-						"name": "unlockTime",
-						"type": "uint256"
-					},
-					{
-						"internalType": "bool",
-						"name": "isAnonymous",
-						"type": "bool"
-					},
-					{
-						"internalType": "bool",
-						"name": "isWithdrawn",
-						"type": "bool"
-					},
-					{
-						"internalType": "bool",
-						"name": "isCancelled",
-						"type": "bool"
-					},
-					{
-						"internalType": "string",
-						"name": "message",
-						"type": "string"
-					}
-				],
-				"internalType": "struct CryptoGiftCapsuleV4.Gift",
-				"name": "viewGift",
-				"type": "tuple"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint256",
-				"name": "_packetId",
-				"type": "uint256"
-			}
-		],
-		"name": "getRedPacketDetails",
-		"outputs": [
-			{
-				"components": [
-					{
-						"internalType": "uint256",
-						"name": "id",
-						"type": "uint256"
-					},
-					{
-						"internalType": "address",
-						"name": "sender",
-						"type": "address"
-					},
-					{
-						"internalType": "address",
-						"name": "tokenAddress",
-						"type": "address"
-					},
-					{
-						"internalType": "uint256",
-						"name": "totalAmount",
-						"type": "uint256"
-					},
-					{
-						"internalType": "uint256",
-						"name": "remainingAmount",
-						"type": "uint256"
-					},
-					{
-						"internalType": "uint256",
-						"name": "totalClaimers",
-						"type": "uint256"
-					},
-					{
-						"internalType": "uint256",
-						"name": "remainingClaimers",
-						"type": "uint256"
-					},
-					{
-						"internalType": "uint256",
-						"name": "unlockTime",
-						"type": "uint256"
-					},
-					{
-						"internalType": "bool",
-						"name": "isRandom",
-						"type": "bool"
-					},
-					{
-						"internalType": "bool",
-						"name": "isAnonymous",
-						"type": "bool"
-					},
-					{
-						"internalType": "bool",
-						"name": "isCancelled",
-						"type": "bool"
-					},
-					{
-						"internalType": "string",
-						"name": "message",
-						"type": "string"
-					}
-				],
-				"internalType": "struct CryptoGiftCapsuleV4.RedPacket",
-				"name": "viewPacket",
-				"type": "tuple"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
 	},
 	{
 		"inputs": [],
@@ -711,12 +637,57 @@
 	},
 	{
 		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "paused",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
 		"name": "redPacketCounter",
 		"outputs": [
 			{
 				"internalType": "uint256",
 				"name": "",
 				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes4",
+				"name": "interfaceId",
+				"type": "bytes4"
+			}
+		],
+		"name": "supportsInterface",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
 			}
 		],
 		"stateMutability": "view",

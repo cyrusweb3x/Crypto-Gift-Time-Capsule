@@ -12,10 +12,10 @@ import { ethers, BrowserProvider, Contract, formatEther, formatUnits, JsonRpcPro
 import { Button } from "@/components/ui/button";
 import contractAbi from "@/contractAbi.json";
 
-// Contract Configuration
-const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
-const BASE_SEPOLIA_ID = "0x14a34"; 
-const PUBLIC_RPC = "https://sepolia.base.org"; 
+// Contract Configuration (Updated for Base Mainnet)
+const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
+const BASE_CHAIN_ID = "0x2105"; // 8453 in hex
+const PUBLIC_RPC = "https://mainnet.base.org"; 
 
 export default function HomePage() {
   const [isConnected, setIsConnected] = useState(false);
@@ -56,11 +56,11 @@ export default function HomePage() {
       
       if (accounts[0]) {
         const network = await provider.getNetwork();
-        if (network.chainId !== 84532n) {
+        if (network.chainId !== 8453n) {
           try {
             await window.ethereum.request({
               method: "wallet_switchEthereumChain",
-              params: [{ chainId: BASE_SEPOLIA_ID }],
+              params: [{ chainId: BASE_CHAIN_ID }],
             });
           } catch (error) { console.error(error); }
         }
@@ -190,7 +190,7 @@ export default function HomePage() {
             <Gift className="h-10 w-10 text-white" />
           </motion.div>
           <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-4 text-5xl font-black tracking-tighter text-foreground">
-            Gift Time <br/> <span className="text-primary">Capsule</span>
+            Gift Time <br/> <span className="text-primary">Base Capsule</span>
           </motion.h1>
           <motion.p initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="max-w-xs text-lg font-medium text-muted-foreground">
             Send time-locked crypto gifts & Red Packets that unlock in the future.
@@ -207,7 +207,6 @@ export default function HomePage() {
         {/* Features */}
         <section className="mb-12 space-y-3">
           <FeatureCard icon={<Lock className="h-5 w-5" />} title="Time-Locked" description="Set exact unlock time for gifts." delay={0.2} />
-          {/* New Red Packet Mention */}
           <FeatureCard icon={<Users className="h-5 w-5" />} title="Red Packets" description="Share crypto with multiple friends at once." delay={0.3} />
           <FeatureCard icon={<Diamond className="h-5 w-5" />} title="NFT Keys" description="Recipient gets a unique key." delay={0.4} />
           <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless Base smart contracts." delay={0.5} />
@@ -217,14 +216,12 @@ export default function HomePage() {
         <section className="rounded-3xl bg-secondary/50 p-6">
           <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
           <div className="space-y-4">
-             {/* Fixed Blockscout URL Issue */}
-             <TrustLink href={`https://base-sepolia.blockscout.com/address/${0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c}`} text="View Contract on Basescan" />
+             <TrustLink href="https://basescan.org/address/0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3#code" text="View Contract on Basescan" />
              <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
              <TrustLink href="#" text="View Audit Report" />
           </div>
         </section>
 
-        {/* New FAQ/Trust Section */}
         <TrustSection />
       </main>
 

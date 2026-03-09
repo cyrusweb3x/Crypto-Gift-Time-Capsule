@@ -14,11 +14,12 @@ import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 import contractAbi from "@/contractAbi.json";
 
-const CONTRACT_ADDRESS = "0x80ad25915F08Eb42423588c1872E7664D2E1Cc1c";
-const BASE_SEPOLIA_ID = "0x14a34"; 
+// Updated for Base Mainnet
+const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
+const BASE_CHAIN_ID = "0x2105"; // 8453
 const STORAGE_KEY = "yupp_wallet_connected";
 
-const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"; 
+const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // Base Mainnet USDC
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
 // Helpers
@@ -77,11 +78,11 @@ export default function CapsulesPage() {
       const _signer = await _provider.getSigner();
       const network = await _provider.getNetwork();
       
-      if (Number(network.chainId) !== 84532) {
+      if (Number(network.chainId) !== 8453) {
           try {
               await window.ethereum.request({
                   method: "wallet_switchEthereumChain",
-                  params: [{ chainId: BASE_SEPOLIA_ID }],
+                  params: [{ chainId: BASE_CHAIN_ID }],
               });
           } catch (e) { console.error(e); }
       }
