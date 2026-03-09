@@ -19,12 +19,12 @@ export const metadata: Metadata = {
       version: "next",
       imageUrl: "https://basecapsule.space/og-image.png",
       button: {
-        title: "Launch Time Capsule",
+        title: "Launch Base Capsule",
         action: {
           type: "launch_miniapp",
           name: "CryptoGift Capsule",
           url: "https://basecapsule.space",
-          splashImageUrl: "https://basecapsule.space/splash.png",
+          splashImageUrl: "https://basecapsule.space/placeholder-logo.png",
           splashBackgroundColor: "#0A0A0B",
         },
       },
