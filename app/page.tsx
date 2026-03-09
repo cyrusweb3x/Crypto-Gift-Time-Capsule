@@ -2,6 +2,7 @@
 
 "use client";
 
+import Head from 'next/head';
 import React, { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Header } from "@/components/header";
@@ -167,69 +168,74 @@ export default function HomePage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
-      <Header 
-        isConnected={isConnected} 
-        address={address} 
-        onConnect={handleConnect} 
-        onDisconnect={() => setShowDisconnectAlert(true)} 
-      />
+    <>
+      <Head>
+        <meta name="base:app_id" content="69ae9a67f6467f4d78d3041c" />
+      </Head>
+      <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
+        <Header 
+          isConnected={isConnected} 
+          address={address} 
+          onConnect={handleConnect} 
+          onDisconnect={() => setShowDisconnectAlert(true)} 
+        />
 
-      <main className="mx-auto max-w-[480px] px-6 py-8">
-        {/* Hero */}
-        <section className="mb-12 flex flex-col items-center text-center">
-          <motion.div
-            className="mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-primary"
-            animate={{ scale: [1, 1.05, 1] }}
-            transition={{ duration: 4, repeat: Infinity }}
-          >
-            <Gift className="h-10 w-10 text-white" />
-          </motion.div>
-          <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-4 text-5xl font-black tracking-tighter text-foreground">
-            Gift Time <br/> <span className="text-primary">Base Capsule</span>
-          </motion.h1>
-          <motion.p initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="max-w-xs text-lg font-medium text-muted-foreground">
-            Send time-locked crypto gifts & Red Packets that unlock in the future.
-          </motion.p>
-        </section>
+        <main className="mx-auto max-w-[480px] px-6 py-8">
+          {/* Hero */}
+          <section className="mb-12 flex flex-col items-center text-center">
+            <motion.div
+              className="mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-primary"
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 4, repeat: Infinity }}
+            >
+              <Gift className="h-10 w-10 text-white" />
+            </motion.div>
+            <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-4 text-5xl font-black tracking-tighter text-foreground">
+              Gift Time <br/> <span className="text-primary">Base Capsule</span>
+            </motion.h1>
+            <motion.p initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="max-w-xs text-lg font-medium text-muted-foreground">
+              Send time-locked crypto gifts & Red Packets that unlock in the future.
+            </motion.p>
+          </section>
 
-        {/* Stats */}
-        <section className="mb-12 grid grid-cols-3 gap-2">
-            <StatCard value={stats.giftsSent} label="Created" delay={0.2} />
-            <StatCard value={stats.ethLocked} label="ETH Locked" delay={0.3} />
-            <StatCard value={stats.usdcLocked} label="USDC Locked" delay={0.4} />
-        </section>
+          {/* Stats */}
+          <section className="mb-12 grid grid-cols-3 gap-2">
+              <StatCard value={stats.giftsSent} label="Created" delay={0.2} />
+              <StatCard value={stats.ethLocked} label="ETH Locked" delay={0.3} />
+              <StatCard value={stats.usdcLocked} label="USDC Locked" delay={0.4} />
+          </section>
 
-        {/* Features */}
-        <section className="mb-12 space-y-3">
-          <FeatureCard icon={<Lock className="h-5 w-5" />} title="Time-Locked" description="Set exact unlock time for gifts." delay={0.2} />
-          <FeatureCard icon={<Users className="h-5 w-5" />} title="Red Packets" description="Share crypto with multiple friends at once." delay={0.3} />
-          <FeatureCard icon={<Diamond className="h-5 w-5" />} title="NFT Keys" description="Recipient gets a unique key." delay={0.4} />
-          <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless Base smart contracts." delay={0.5} />
-        </section>
+          {/* Features */}
+          <section className="mb-12 space-y-3">
+            <FeatureCard icon={<Lock className="h-5 w-5" />} title="Time-Locked" description="Set exact unlock time for gifts." delay={0.2} />
+            <FeatureCard icon={<Users className="h-5 w-5" />} title="Red Packets" description="Share crypto with multiple friends at once." delay={0.3} />
+            <FeatureCard icon={<Diamond className="h-5 w-5" />} title="NFT Keys" description="Recipient gets a unique key." delay={0.4} />
+            <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless Base smart contracts." delay={0.5} />
+          </section>
 
-        {/* Trust & Transparency */}
-        <section className="rounded-3xl bg-secondary/50 p-6">
-          <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
-          <div className="space-y-4">
-             <TrustLink href="https://basescan.org/address/0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3#code" text="View Contract on Basescan" />
-             <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
-             <TrustLink href="#" text="View Audit Report" />
-          </div>
-        </section>
+          {/* Trust & Transparency */}
+          <section className="rounded-3xl bg-secondary/50 p-6">
+            <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
+            <div className="space-y-4">
+               <TrustLink href="https://basescan.org/address/0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3#code" text="View Contract on Basescan" />
+               <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
+               <TrustLink href="#" text="View Audit Report" />
+            </div>
+          </section>
 
-        <TrustSection />
-      </main>
+          <TrustSection />
+        </main>
 
-      <BottomNav />
+        <BottomNav />
 
-      {/* Disconnect Confirmation Modal */}
-      <DisconnectModal 
-        isOpen={showDisconnectAlert} 
-        onClose={() => setShowDisconnectAlert(false)} 
-        onConfirm={confirmDisconnect} 
-      />
-    </div>
+        {/* Disconnect Confirmation Modal */}
+        <DisconnectModal 
+          isOpen={showDisconnectAlert} 
+          onClose={() => setShowDisconnectAlert(false)} 
+          onConfirm={confirmDisconnect} 
+        />
+      </div>
+    </>
   );
 }
 
