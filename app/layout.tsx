@@ -1,4 +1,4 @@
-import React from "react"
+import React from "react";
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
@@ -11,6 +11,9 @@ export const metadata: Metadata = {
   description:
     "Send crypto gifts that unlock in the future. Time-locked gifting secured on Base.",
   generator: "v0.app",
+  other: {
+    "base:app_id": "69ae9a67f6467f4d78d3041c", // মেটা ট্যাগটি এখানে যোগ করা হয়েছে
+  },
 };
 
 export const viewport: Viewport = {
@@ -28,7 +31,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.className} antialiased`}>{children}</body>
+      <body className={`${inter.className} antialiased`}>
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }
