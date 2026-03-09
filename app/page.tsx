@@ -11,8 +11,9 @@ import { Lock, Diamond, Shield, Gift, ArrowRight, AlertCircle, Users } from "luc
 import { ethers, BrowserProvider, Contract, formatEther, formatUnits, JsonRpcProvider } from "ethers";
 import { Button } from "@/components/ui/button";
 import contractAbi from "@/contractAbi.json";
+import { sdk } from "@farcaster/miniapp-sdk";
 
-// Contract Configuration (Updated for Base Mainnet)
+// Contract Configuration 
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
 const BASE_CHAIN_ID = "0x2105"; // 8453 in hex
 const BASE_CHAIN_ID_DEC = 8453;
@@ -29,6 +30,17 @@ export default function HomePage() {
     ethLocked: "...",
     usdcLocked: "...",
   });
+
+  useEffect(() => {
+    const initSdk = async () => {
+      try {
+        sdk.actions.ready();
+      } catch (error) {
+        console.error("SDK initialization failed", error);
+      }
+    };
+    initSdk();
+  }, []);
 
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
@@ -93,7 +105,6 @@ export default function HomePage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- 2. Stats Logic (Updated for ETH, USDC & Red Packets) ---
   useEffect(() => {
     const fetchStats = async () => {
       try {
@@ -104,7 +115,6 @@ export default function HomePage() {
         let totalEthValue = 0;
         let totalUsdcValue = 0;
 
-        // 1. Fetch Normal Gifts
         if (contract.giftCounter && contract.getGiftDetails) {
             const counter = await contract.giftCounter();
             totalGiftsCount += Number(counter);
@@ -123,12 +133,11 @@ export default function HomePage() {
                 if (tokenAddr === ethers.ZeroAddress) {
                     totalEthValue += parseFloat(formatEther(amount));
                 } else {
-                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); // Assuming USDC has 6 decimals
+                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
                 }
             });
         }
 
-        // 2. Fetch Red Packets Data
         if (contract.redPacketCounter && contract.getRedPacketDetails) {
             const rpCounter = await contract.redPacketCounter();
             totalGiftsCount += Number(rpCounter);
@@ -147,7 +156,7 @@ export default function HomePage() {
                 if (tokenAddr === ethers.ZeroAddress) {
                     totalEthValue += parseFloat(formatEther(amount));
                 } else {
-                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); // Assuming USDC has 6 decimals
+                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
                 }
             });
         }
@@ -176,7 +185,6 @@ export default function HomePage() {
       />
 
       <main className="mx-auto max-w-[480px] px-6 py-8">
-        {/* Hero */}
         <section className="mb-12 flex flex-col items-center text-center">
           <motion.div
             className="mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-primary"
@@ -193,14 +201,12 @@ export default function HomePage() {
           </motion.p>
         </section>
 
-        {/* Stats */}
         <section className="mb-12 grid grid-cols-3 gap-2">
             <StatCard value={stats.giftsSent} label="Created" delay={0.2} />
             <StatCard value={stats.ethLocked} label="ETH Locked" delay={0.3} />
             <StatCard value={stats.usdcLocked} label="USDC Locked" delay={0.4} />
         </section>
 
-        {/* Features */}
         <section className="mb-12 space-y-3">
           <FeatureCard icon={<Lock className="h-5 w-5" />} title="Time-Locked" description="Set exact unlock time for gifts." delay={0.2} />
           <FeatureCard icon={<Users className="h-5 w-5" />} title="Red Packets" description="Share crypto with multiple friends at once." delay={0.3} />
@@ -208,7 +214,6 @@ export default function HomePage() {
           <FeatureCard icon={<Shield className="h-5 w-5" />} title="On-Chain" description="Trustless Base smart contracts." delay={0.5} />
         </section>
 
-        {/* Trust & Transparency */}
         <section className="rounded-3xl bg-secondary/50 p-6">
           <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
           <div className="space-y-4">
@@ -223,7 +228,6 @@ export default function HomePage() {
 
       <BottomNav />
 
-      {/* Disconnect Confirmation Modal */}
       <DisconnectModal 
         isOpen={showDisconnectAlert} 
         onClose={() => setShowDisconnectAlert(false)} 
@@ -232,8 +236,6 @@ export default function HomePage() {
     </div>
   );
 }
-
-// --- Sub Components ---
 
 function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
     if (!isOpen) return null;

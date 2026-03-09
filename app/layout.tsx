@@ -1,3 +1,5 @@
+// app/layout.tsx
+
 import React from "react";
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
@@ -12,7 +14,21 @@ export const metadata: Metadata = {
     "Send crypto gifts that unlock in the future. Time-locked gifting secured on Base.",
   generator: "v0.app",
   other: {
-    "base:app_id": "69ae9a67f6467f4d78d3041c", // মেটা ট্যাগটি এখানে যোগ করা হয়েছে
+    "base:app_id": "69ae9a67f6467f4d78d3041c",
+    "fc:miniapp": JSON.stringify({
+      version: "next",
+      imageUrl: "https://basecapsule.space/og-image.png",
+      button: {
+        title: "Launch Time Capsule",
+        action: {
+          type: "launch_miniapp",
+          name: "CryptoGift Capsule",
+          url: "https://basecapsule.space",
+          splashImageUrl: "https://basecapsule.space/splash.png",
+          splashBackgroundColor: "#0A0A0B",
+        },
+      },
+    }),
   },
 };
 
