@@ -15,6 +15,8 @@ import contractAbi from "@/contractAbi.json";
 // Contract Configuration (Updated for Base Mainnet)
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
 const BASE_CHAIN_ID = "0x2105"; // 8453 in hex
+const BASE_CHAIN_ID_DEC = 8453;
+const BASE_CHAIN_ID_BIGINT = BigInt(BASE_CHAIN_ID_DEC);
 const PUBLIC_RPC = "https://mainnet.base.org"; 
 
 export default function HomePage() {
@@ -22,16 +24,12 @@ export default function HomePage() {
   const [address, setAddress] = useState("");
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
-  // Updated state for USDC instead of Users
   const [stats, setStats] = useState({
     giftsSent: "...",
     ethLocked: "...",
     usdcLocked: "...",
   });
 
-  // --- 1. Wallet Logic ---
-  
-  // A. Silent Connect (For Page Load)
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -47,7 +45,6 @@ export default function HomePage() {
     }
   }, []);
 
-  // B. Manual Connect (Triggered by User)
   const handleConnect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -56,7 +53,7 @@ export default function HomePage() {
       
       if (accounts[0]) {
         const network = await provider.getNetwork();
-        if (network.chainId !== 8453n) {
+        if (network.chainId !== BASE_CHAIN_ID_BIGINT) {
           try {
             await window.ethereum.request({
               method: "wallet_switchEthereumChain",
@@ -73,7 +70,6 @@ export default function HomePage() {
     }
   }, []);
 
-  // C. Disconnect
   const confirmDisconnect = useCallback(() => {
     setIsConnected(false);
     setAddress("");
