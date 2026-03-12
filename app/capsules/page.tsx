@@ -14,6 +14,10 @@ import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 import contractAbi from "@/contractAbi.json";
 
+// OnchainKit Identity Imports
+import { getName, getAvatar } from "@coinbase/onchainkit/identity";
+import { base } from "viem/chains";
+
 // Updated for Base Mainnet
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
 const BASE_CHAIN_ID = "0x2105"; // 8453
@@ -94,14 +98,17 @@ export default function CapsulesPage() {
       
       await fetchBalances(acc, _provider);
       
+      // --- UPDATED: OnchainKit Identity Fetching ---
       try {
-          const name = await _provider.lookupAddress(acc);
+          const name = await getName({ address: acc as `0x${string}`, chain: base });
           if (name) {
               setBasename(name);
-              const avt = await _provider.getAvatar(name);
-              setAvatar(avt);
+              const avt = await getAvatar({ ensName: name, chain: base });
+              setAvatar(avt || null);
           }
-      } catch (e) {}
+      } catch (e) { 
+          console.error("Identity lookup error", e); 
+      }
   };
 
   const checkConnection = useCallback(async () => {
