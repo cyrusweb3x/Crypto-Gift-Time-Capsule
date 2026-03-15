@@ -160,24 +160,26 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
+      // BUG FIX: changed limits to >= 0 to include ID 0 (for 0-indexed contracts)
       const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
           const results = [];
-          for (let i = total; i >= 1; i -= batchSize) {
+          for (let i = total; i >= 0; i -= batchSize) {
               const batch = [];
-              for (let j = 0; j < batchSize && (i - j) >= 1; j++) {
-                  batch.push(fetchFn(i - j).catch((err) => {
-                      console.error(`Fetch error for ID ${i-j}:`, err);
-                      return null;
+              for (let j = 0; j < batchSize && (i - j) >= 0; j++) {
+                  batch.push(fetchFn(i - j).catch(() => {
+                      return null; // Ignore errors for non-existent IDs
                   }));
               }
               results.push(...(await Promise.all(batch)));
-              await new Promise(resolve => setTimeout(resolve, 100));
+              await new Promise(resolve => setTimeout(resolve, 50));
           }
-          return results;
+          return results.filter(Boolean); // Filter out null results early
       };
 
       try {
           const totalGifts = Number(await contract.giftCounter());
+          console.log("Total Regular Gifts found:", totalGifts);
+
           const rawGifts = await fetchInBatches(totalGifts, (id) => contract.getGiftDetails(id));
 
           rawGifts.forEach((gift: any) => {
@@ -222,12 +224,13 @@ export default function CapsulesPage() {
                 if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
                 received.push(recData);
               }
-            } catch (err) { }
+            } catch (err) { console.error("Error parsing gift:", err); }
           });
-      } catch (err) { }
+      } catch (err) { console.error("Error fetching giftCounter:", err); }
 
       try {
           const totalRPs = Number(await contract.redPacketCounter());
+          console.log("Total Red Packets found:", totalRPs);
           const myClaims: { [key: string]: string } = {};
           
           try {
@@ -339,9 +342,9 @@ export default function CapsulesPage() {
                       });
                   }
 
-              } catch (err) { }
+              } catch (err) { console.error("Error parsing red packet:", err); }
           }
-      } catch (err) { }
+      } catch (err) { console.error("Error fetching redPacketCounter:", err); }
 
       const sortByIdDesc = (a: any, b: any) => {
           const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
