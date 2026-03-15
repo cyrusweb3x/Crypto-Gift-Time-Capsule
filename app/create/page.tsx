@@ -179,7 +179,11 @@ export default function CreatePage() {
           const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
           const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
           let checkAmount = BigInt(0);
-          try { checkAmount = parseUnits(amount || "0", usdcDecimals); } catch {}
+          
+          let cleanAmt = amount || "0";
+          if (cleanAmt.startsWith(".")) cleanAmt = "0" + cleanAmt;
+          
+          try { checkAmount = parseUnits(cleanAmt, usdcDecimals); } catch {}
           if (allowance < checkAmount && checkAmount > BigInt(0)) { setNeedsApproval(true); } else { setNeedsApproval(allowance === BigInt(0) && parseFloat(amount) > 0); }
         } catch (e) { console.error(e); }
       };
@@ -229,19 +233,30 @@ export default function CreatePage() {
 
   const handleSubmit = async () => {
     if (!validate()) return;
-    if (!signer) { connect(); return; }
+    if (!signer || !provider) { connect(); return; }
     const correctChain = await ensureChain();
     if (!correctChain) { setErrors({ submit: "Wrong network. Switch to Base Mainnet." }); return; }
 
     try {
       setLoadingStep("IDLE");
       setErrors({}); 
-      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
       
+      // Check ETH Gas Balance First
+      const ethBalRaw = await provider.getBalance(address);
+      if (ethBalRaw === BigInt(0)) {
+          setErrors({ submit: "You need some ETH on Base Mainnet to pay for Gas fees!" });
+          return;
+      }
+
+      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
       const giftContract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
       
       const decimals = selectedToken === "ETH" ? 18 : usdcDecimals;
-      const amountWei = parseUnits(amount, decimals);
+      
+      // Handle inputs like ".5" cleanly
+      let cleanAmount = amount;
+      if (cleanAmount.startsWith(".")) cleanAmount = "0" + cleanAmount;
+      const amountWei = parseUnits(cleanAmount, decimals);
       
       const unlockTimestamp = Math.floor(new Date(`${unlockDate}T${unlockTime}`).getTime() / 1000);
       const unlockTimeBigInt = BigInt(unlockTimestamp);
@@ -253,8 +268,9 @@ export default function CreatePage() {
         const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
         if (allowance < amountWei) {
             setLoadingStep("APPROVING");
-            const txApprove = await usdcContract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
-            await txApprove.wait();
+            // Appoving exact amount instead of MaxUint256 to prevent revert
+            const txApprove = await usdcContract.approve(CONTRACT_ADDRESS, amountWei);
+            await txApprove.wait(1);
             
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
@@ -265,7 +281,6 @@ export default function CreatePage() {
       const valueArg = selectedToken === "ETH" ? amountWei : BigInt(0); 
       
       let tx;
-      
       const txOptions: any = { value: valueArg };
       
       if (isRedPacket) {
@@ -296,9 +311,7 @@ export default function CreatePage() {
                       newPacketId = parsedLog.args[0].toString();
                       break;
                   }
-              } catch (e) {
-                 // Ignore unsupported logs
-              }
+              } catch (e) { }
           }
 
           const finalId = newPacketId ? newPacketId : tx.hash.slice(0, 10);
@@ -306,24 +319,20 @@ export default function CreatePage() {
           setGeneratedLink(`${window.location.origin}/packet/${finalId}`);
           setShowLinkModal(true);
       } else {
-          // ==========================================
-          // এখানে কোডটি ফিক্স করা হয়েছে (Fixed Code)
-          // ==========================================
           const assetType = selectedToken === "ETH" ? 0 : 1; 
           const tokenId = 0; 
 
           tx = await giftContract.createGift(
-              assetType,          // 1. AssetType (0 for ETH, 1 for ERC20)
-              tokenArg,           // 2. Token Address
-              tokenId,            // 3. Token ID (0 for ETH/USDC)
-              amountWei,          // 4. Amount
-              resolvedAddress,    // 5. Recipient
-              unlockTimeBigInt,   // 6. Unlock Time
-              isAnonymous,        // 7. Is Anonymous
-              obfuscatedMessage,  // 8. Message
-              txOptions           // Value (ETH amount if native)
+              assetType,          
+              tokenArg,           
+              tokenId,            
+              amountWei,          
+              resolvedAddress,    
+              unlockTimeBigInt,   
+              isAnonymous,        
+              obfuscatedMessage,  
+              txOptions           
           );
-          // ==========================================
 
           await tx.wait();
           
@@ -339,7 +348,7 @@ export default function CreatePage() {
       fetchBalances();
 
     } catch (err: any) {
-      console.error(err);
+      console.error("Tx Error details:", err);
       setLoadingStep("IDLE");
       
       if (err.code === "ACTION_REJECTED") {
@@ -347,15 +356,28 @@ export default function CreatePage() {
           return;
       }
       
+      // Improved Error parsing for real cause
       let errorMsg = "Transaction failed.";
-      if (err.reason) {
+      if (err.info?.error?.message) {
+          errorMsg = err.info.error.message;
+      } else if (err.error?.message) {
+          errorMsg = err.error.message;
+      } else if (err.shortMessage) {
+          errorMsg = err.shortMessage;
+      } else if (err.reason) {
           errorMsg = err.reason;
-          if (err.reason.includes("require(false)")) {
-              errorMsg = "Contract Rejected: The smart contract might not fully support this specific feature (Try ETH or Lucky Draw).";
-          }
-      } 
-      else if (err.data && err.data.message) errorMsg = err.data.message;
-      else if (err.message && err.message.length < 50) errorMsg = err.message;
+      } else if (err.message) {
+          errorMsg = err.message.length > 80 ? err.message.substring(0, 80) + "..." : err.message;
+      }
+
+      // Format common errors for readability
+      if (errorMsg.includes("insufficient funds") || errorMsg.includes("gas required exceeds allowance")) {
+          errorMsg = "Not enough ETH to pay for transaction gas fees on Base.";
+      } else if (errorMsg.includes("transfer amount exceeds balance")) {
+          errorMsg = "Your USDC balance is too low.";
+      } else if (errorMsg.includes("require") || errorMsg.includes("reverted")) {
+          errorMsg = "Contract Revert: " + errorMsg;
+      }
       
       setErrors({ submit: errorMsg });
     }
