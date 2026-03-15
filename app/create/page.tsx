@@ -131,6 +131,7 @@ export default function CreatePage() {
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [balances, setBalances] = useState({ ETH: "0.0", USDC: "0.0" });
   const [usdcDecimals, setUsdcDecimals] = useState(6);
+  const [usdcAllowance, setUsdcAllowance] = useState<bigint>(BigInt(0));
   const [needsApproval, setNeedsApproval] = useState(false);
   const [loadingStep, setLoadingStep] = useState<"IDLE" | "APPROVING" | "CREATING">("IDLE");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -165,44 +166,67 @@ export default function CreatePage() {
       } catch (e) { console.error("Balance fetch error:", e); }
   }, [address, provider]);
 
+  // Reduced polling to prevent RPC spam (Every 30 seconds instead of 10)
   useEffect(() => {
     fetchBalances();
-    const interval = setInterval(fetchBalances, 10000);
+    const interval = setInterval(fetchBalances, 30000);
     return () => clearInterval(interval);
   }, [fetchBalances]);
 
-  // Check Approval
+  // Fetch Allowance only ONCE when wallet/token changes
   useEffect(() => {
     if (selectedToken === "USDC" && address && signer) {
-      const checkAllowance = async () => {
+      const fetchAllowance = async () => {
         try {
           const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
           const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
-          let checkAmount = BigInt(0);
-          
-          let cleanAmt = amount || "0";
-          if (cleanAmt.startsWith(".")) cleanAmt = "0" + cleanAmt;
-          
-          try { checkAmount = parseUnits(cleanAmt, usdcDecimals); } catch {}
-          if (allowance < checkAmount && checkAmount > BigInt(0)) { setNeedsApproval(true); } else { setNeedsApproval(allowance === BigInt(0) && parseFloat(amount) > 0); }
-        } catch (e) { console.error(e); }
+          setUsdcAllowance(allowance);
+        } catch (e) { console.error("Allowance fetch error:", e); }
       };
-      checkAllowance();
-    } else { setNeedsApproval(false); }
-  }, [selectedToken, amount, address, signer, usdcDecimals]);
+      fetchAllowance();
+    }
+  }, [selectedToken, address, signer]);
 
+  // Check Approval locally
+  useEffect(() => {
+    if (selectedToken === "USDC") {
+        let checkAmount = BigInt(0);
+        let cleanAmt = amount || "0";
+        if (cleanAmt.startsWith(".")) cleanAmt = "0" + cleanAmt;
+        
+        try { checkAmount = parseUnits(cleanAmt, usdcDecimals); } catch {}
+        
+        if (usdcAllowance < checkAmount && checkAmount > BigInt(0)) { 
+            setNeedsApproval(true); 
+        } else { 
+            setNeedsApproval(false); 
+        }
+    } else { 
+        setNeedsApproval(false); 
+    }
+  }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
+
+  // Optimized ENS Resolution
   const handleRecipientChange = async (val: string) => {
-    setRecipientInput(val);
+    const safeVal = String(val || "");
+    setRecipientInput(safeVal);
     setErrors(prev => ({ ...prev, recipient: "" }));
-    if (!val) { setResolvedAddress(""); return; }
-    if (ethers.isAddress(val)) { setResolvedAddress(val); return; }
-    setIsResolving(true);
-    try {
-      if (provider) {
-        const resolved = await provider.resolveName(val);
-        if (resolved) { setResolvedAddress(resolved); } else { setResolvedAddress(""); }
-      }
-    } catch { setResolvedAddress(""); } finally { setIsResolving(false); }
+    
+    if (!safeVal) { setResolvedAddress(""); return; }
+    if (ethers.isAddress(safeVal)) { setResolvedAddress(safeVal); return; }
+    
+    // Only resolve if it contains a dot, fixing TS error with String()
+    if (safeVal.includes(".")) {
+        setIsResolving(true);
+        try {
+          if (provider) {
+            const resolved = await provider.resolveName(safeVal);
+            if (resolved) { setResolvedAddress(resolved); } else { setResolvedAddress(""); }
+          }
+        } catch { setResolvedAddress(""); } finally { setIsResolving(false); }
+    } else {
+        setResolvedAddress("");
+    }
   };
 
   const validate = () => {
@@ -241,7 +265,6 @@ export default function CreatePage() {
       setLoadingStep("IDLE");
       setErrors({}); 
       
-      // Check ETH Gas Balance First
       const ethBalRaw = await provider.getBalance(address);
       if (ethBalRaw === BigInt(0)) {
           setErrors({ submit: "You need some ETH on Base Mainnet to pay for Gas fees!" });
@@ -253,7 +276,6 @@ export default function CreatePage() {
       
       const decimals = selectedToken === "ETH" ? 18 : usdcDecimals;
       
-      // Handle inputs like ".5" cleanly
       let cleanAmount = amount;
       if (cleanAmount.startsWith(".")) cleanAmount = "0" + cleanAmount;
       const amountWei = parseUnits(cleanAmount, decimals);
@@ -265,13 +287,11 @@ export default function CreatePage() {
       const obfuscatedMessage = btoa(JSON.stringify(metadata));
 
       if (selectedToken === "USDC") {
-        const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
-        if (allowance < amountWei) {
+        if (usdcAllowance < amountWei) {
             setLoadingStep("APPROVING");
-            // Appoving exact amount instead of MaxUint256 to prevent revert
             const txApprove = await usdcContract.approve(CONTRACT_ADDRESS, amountWei);
             await txApprove.wait(1);
-            
+            setUsdcAllowance(amountWei);
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
@@ -303,11 +323,14 @@ export default function CreatePage() {
 
           for (const log of receipt.logs) {
               try {
+                  // Type cast to any to prevent TS never error
                   const parsedLog = giftContract.interface.parseLog({
-                      topics: [...log.topics],
+                      topics: Array.from(log.topics || []),
                       data: log.data
-                  });
-                  if (parsedLog && parsedLog.name.includes("Created")) {
+                  }) as any;
+                  
+                  // Strict String casting for TS safety
+                  if (parsedLog && parsedLog.name && String(parsedLog.name).includes("Created")) {
                       newPacketId = parsedLog.args[0].toString();
                       break;
                   }
@@ -356,27 +379,29 @@ export default function CreatePage() {
           return;
       }
       
-      // Improved Error parsing for real cause
-      let errorMsg = "Transaction failed.";
-      if (err.info?.error?.message) {
-          errorMsg = err.info.error.message;
-      } else if (err.error?.message) {
-          errorMsg = err.error.message;
-      } else if (err.shortMessage) {
-          errorMsg = err.shortMessage;
-      } else if (err.reason) {
-          errorMsg = err.reason;
-      } else if (err.message) {
-          errorMsg = err.message.length > 80 ? err.message.substring(0, 80) + "..." : err.message;
+      // Strict string conversion to prevent TS never errors
+      let errorMsg: string = "Transaction failed.";
+      
+      if (err?.info?.error?.message) {
+          errorMsg = String(err.info.error.message);
+      } else if (err?.error?.message) {
+          errorMsg = String(err.error.message);
+      } else if (err?.shortMessage) {
+          errorMsg = String(err.shortMessage);
+      } else if (err?.reason) {
+          errorMsg = String(err.reason);
+      } else if (err?.message) {
+          errorMsg = String(err.message).length > 80 ? String(err.message).substring(0, 80) + "..." : String(err.message);
       }
 
-      // Format common errors for readability
-      if (errorMsg.includes("insufficient funds") || errorMsg.includes("gas required exceeds allowance")) {
+      const safeErrorMsg = String(errorMsg);
+
+      if (safeErrorMsg.includes("insufficient funds") || safeErrorMsg.includes("gas required exceeds allowance")) {
           errorMsg = "Not enough ETH to pay for transaction gas fees on Base.";
-      } else if (errorMsg.includes("transfer amount exceeds balance")) {
+      } else if (safeErrorMsg.includes("transfer amount exceeds balance")) {
           errorMsg = "Your USDC balance is too low.";
-      } else if (errorMsg.includes("require") || errorMsg.includes("reverted")) {
-          errorMsg = "Contract Revert: " + errorMsg;
+      } else if (safeErrorMsg.includes("require") || safeErrorMsg.includes("reverted")) {
+          errorMsg = "Contract Revert: " + safeErrorMsg;
       }
       
       setErrors({ submit: errorMsg });
@@ -455,6 +480,7 @@ export default function CreatePage() {
                     <input value={recipientInput} onChange={(e) => handleRecipientChange(e.target.value)} placeholder="0x... or basename.eth" className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50" />
                     <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50 dark:bg-card"><Clipboard className="h-5 w-5 text-primary" /></button>
                 </div>
+                {isResolving && <p className="ml-2 text-xs font-medium text-muted-foreground">Resolving domain...</p>}
                 {resolvedAddress && resolvedAddress !== recipientInput && <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.slice(0,6)}...{resolvedAddress.slice(-4)}</p>}
                 {errors.recipient && <p className="ml-2 text-xs font-bold text-red-500">{errors.recipient}</p>}
              </div>
@@ -512,7 +538,7 @@ export default function CreatePage() {
           </div>
 
           <Button onClick={handleSubmit} disabled={loadingStep !== "IDLE" || !address || isConnecting} className="w-full h-14 rounded-full text-lg font-black shadow-lg shadow-primary/20 text-white hover:scale-[1.02] active:scale-[0.98] transition-all">
-            {loadingStep === "APPROVING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Approving...</span>) : loadingStep === "CREATING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Minting...</span>) : !address ? "Connect Wallet" : (isRedPacket ? "Create Shareable Link" : "Create Gift")}
+            {loadingStep === "APPROVING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Approving...</span>) : loadingStep === "CREATING" ? (<span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Minting...</span>) : !address ? "Connect Wallet" : (isRedPacket ? "Create Shareable Link" : (needsApproval ? "Approve & Create" : "Create Gift"))}
           </Button>
           
           {errors.submit && (
