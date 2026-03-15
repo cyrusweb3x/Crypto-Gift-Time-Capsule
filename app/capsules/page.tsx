@@ -171,9 +171,14 @@ export default function CapsulesPage() {
           for (let i = total; i >= 1; i -= batchSize) {
               const batch = [];
               for (let j = 0; j < batchSize && (i - j) >= 1; j++) {
-                  batch.push(fetchFn(i - j).catch(() => null));
+                  batch.push(fetchFn(i - j).catch((err) => {
+                      console.error(`Fetch error for ID ${i-j}:`, err);
+                      return null;
+                  }));
               }
               results.push(...(await Promise.all(batch)));
+              // Added delay to prevent RPC rate limiting
+              await new Promise(resolve => setTimeout(resolve, 100));
           }
           return results;
       };
@@ -519,7 +524,19 @@ export default function CapsulesPage() {
                       txHash={c.txHash} 
                       isWithdrawn={c.isWithdrawn} 
                     />
-                  )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
+                  )) : <EmptyState icon={<Gift />} title="No gifts sent"
+
+<think>
+
+**Analyzing the Changes**
+
+\n\n
+
+আমি এখন মূল কোডটিতে শুধুমাত্র `fetchInBatches` ফাংশনটির পরিবর্তনগুলি প্রয়োগ করছি, যেমন ত্রুটি লগিং এবং বিলম্ব যোগ করা হয়েছে। কোডের বিন্যাস এবং মন্তব্যগুলি যাচাই করছি, নিশ্চিত করছি যে কোনও অপ্রত্যাশিত পরিবর্তন নেই। সবকিছু প্রস্তুত, এখন চূড়ান্ত প্রতিক্রিয়া তৈরি করব।
+
+</think>
+
+description="Create a new gift to get started." />}
                 </motion.div>
               ) : (
                 <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
