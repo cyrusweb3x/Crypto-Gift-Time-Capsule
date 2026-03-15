@@ -3,22 +3,30 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
 import { TrustSection } from "@/components/trust-section"; 
 import { Lock, Diamond, Shield, Gift, ArrowRight, AlertCircle, Users } from "lucide-react";
 import { ethers, BrowserProvider, Contract, formatEther, formatUnits, JsonRpcProvider } from "ethers";
 import { Button } from "@/components/ui/button";
-import contractAbi from "@/contractAbi.json";
 import { sdk } from "@farcaster/miniapp-sdk";
 
 // Contract Configuration 
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
 const BASE_CHAIN_ID = "0x2105"; // 8453 in hex
-const BASE_CHAIN_ID_DEC = 8453;
-const BASE_CHAIN_ID_BIGINT = BigInt(BASE_CHAIN_ID_DEC);
+const BASE_CHAIN_ID_BIGINT = BigInt(8453);
 const PUBLIC_RPC = "https://mainnet.base.org"; 
+
+// Extended ABI for reading data (fixes missing getter functions in default ABI)
+const READ_ABI = [
+  "function giftCounter() view returns (uint256)",
+  "function redPacketCounter() view returns (uint256)",
+  "function getGiftDetails(uint256) view returns (uint256 id, uint8 assetType, address sender, address recipient, address tokenAddress, uint256 tokenId, uint256 amount, uint256 unlockTime, bool isAnonymous, bool isWithdrawn, string message)",
+  "function gifts(uint256) view returns (uint256 id, uint8 assetType, address sender, address recipient, address tokenAddress, uint256 tokenId, uint256 amount, uint256 unlockTime, bool isAnonymous, bool isWithdrawn, string message)",
+  "function getRedPacketDetails(uint256) view returns (uint256 id, address sender, address tokenAddress, uint256 totalAmount, uint256 remainingAmount, uint256 totalClaimers, uint256 remainingClaimers, uint256 unlockTime, bool isRandom, bool isAnonymous, bool isCancelled, string message)",
+  "function redPackets(uint256) view returns (uint256 id, address sender, address tokenAddress, uint256 totalAmount, uint256 remainingAmount, uint256 totalClaimers, uint256 remainingClaimers, uint256 unlockTime, bool isRandom, bool isAnonymous, bool isCancelled, string message)"
+];
 
 export default function HomePage() {
   const [isConnected, setIsConnected] = useState(false);
@@ -109,57 +117,59 @@ export default function HomePage() {
     const fetchStats = async () => {
       try {
         const provider = new JsonRpcProvider(PUBLIC_RPC);
-        const contract = new Contract(CONTRACT_ADDRESS, contractAbi, provider);
+        const contract = new Contract(CONTRACT_ADDRESS, READ_ABI, provider);
         
         let totalGiftsCount = 0;
         let totalEthValue = 0;
         let totalUsdcValue = 0;
 
-        if (contract.giftCounter && contract.getGiftDetails) {
+        // Fetch Regular Gifts Stats
+        try {
             const counter = await contract.giftCounter();
             totalGiftsCount += Number(counter);
             
-            const promises = [];
             for (let i = 1; i <= Number(counter); i++) {
-                promises.push(contract.getGiftDetails(i).catch(() => null));
+                try {
+                    let gift;
+                    if (contract.getGiftDetails) gift = await contract.getGiftDetails(i);
+                    else gift = await contract.gifts(i);
+
+                    if (gift) {
+                        const tokenAddr = gift.tokenAddress;
+                        const amount = gift.amount;
+                        if (tokenAddr === ethers.ZeroAddress) {
+                            totalEthValue += parseFloat(formatEther(amount));
+                        } else {
+                            totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
+                        }
+                    }
+                } catch(e) {}
             }
-            const results = await Promise.all(promises);
+        } catch(e) { console.warn("Gift stats fetch error"); }
 
-            results.forEach((gift) => {
-                if (!gift) return;
-                const tokenAddr = gift.tokenAddress || gift[3];
-                const amount = gift.amount || gift[4];
-                
-                if (tokenAddr === ethers.ZeroAddress) {
-                    totalEthValue += parseFloat(formatEther(amount));
-                } else {
-                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
-                }
-            });
-        }
-
-        if (contract.redPacketCounter && contract.getRedPacketDetails) {
+        // Fetch Red Packets Stats
+        try {
             const rpCounter = await contract.redPacketCounter();
             totalGiftsCount += Number(rpCounter);
             
-            const rpPromises = [];
             for (let i = 1; i <= Number(rpCounter); i++) {
-                rpPromises.push(contract.getRedPacketDetails(i).catch(() => null));
-            }
-            const rpResults = await Promise.all(rpPromises);
+                try {
+                    let rp;
+                    if (contract.getRedPacketDetails) rp = await contract.getRedPacketDetails(i);
+                    else rp = await contract.redPackets(i);
 
-            rpResults.forEach((rp) => {
-                if (!rp) return;
-                const tokenAddr = rp.tokenAddress || rp[2] || ethers.ZeroAddress;
-                const amount = rp.totalAmount || rp.amount || rp[3];
-                
-                if (tokenAddr === ethers.ZeroAddress) {
-                    totalEthValue += parseFloat(formatEther(amount));
-                } else {
-                    totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
-                }
-            });
-        }
+                    if (rp) {
+                        const tokenAddr = rp.tokenAddress || ethers.ZeroAddress;
+                        const amount = rp.totalAmount;
+                        if (tokenAddr === ethers.ZeroAddress) {
+                            totalEthValue += parseFloat(formatEther(amount));
+                        } else {
+                            totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
+                        }
+                    }
+                } catch(e) {}
+            }
+        } catch(e) { console.warn("Red Packet stats fetch error"); }
 
         setStats({
           giftsSent: totalGiftsCount.toString(),
@@ -168,10 +178,11 @@ export default function HomePage() {
         });
 
       } catch (error) { 
-          console.error("Stats error:", error); 
+          console.error("Stats logic error:", error); 
           setStats({ giftsSent: "0", ethLocked: "0.00", usdcLocked: "0.00" });
       }
     };
+    
     fetchStats();
   }, []);
 
@@ -217,7 +228,7 @@ export default function HomePage() {
         <section className="rounded-3xl bg-secondary/50 p-6">
           <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted-foreground">Transparency</h2>
           <div className="space-y-4">
-             <TrustLink href="https://basescan.org/address/0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3#code" text="View Contract on Basescan" />
+             <TrustLink href={`https://basescan.org/address/${CONTRACT_ADDRESS}#code`} text="View Contract on Basescan" />
              <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
              <TrustLink href="#" text="View Audit Report" />
           </div>
