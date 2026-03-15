@@ -18,7 +18,7 @@ import { getName, getAvatar } from "@coinbase/onchainkit/identity";
 import { base } from "viem/chains";
 
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
-const BASE_CHAIN_ID = "0x2105"; // 8453
+const BASE_CHAIN_ID = "0x2105"; // 8453 in Hex
 const STORAGE_KEY = "yupp_wallet_connected";
 
 const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -78,13 +78,17 @@ export default function CapsulesPage() {
       const _signer = await _provider.getSigner();
       const network = await _provider.getNetwork();
       
+      // Force switch to Base network if not connected to it
       if (Number(network.chainId) !== 8453) {
           try {
               await window.ethereum.request({
                   method: "wallet_switchEthereumChain",
                   params: [{ chainId: BASE_CHAIN_ID }],
               });
-          } catch (e) { console.error(e); }
+          } catch (e) { 
+              console.error("Please switch to Base Network!", e); 
+              alert("Please switch your wallet to the Base Network to view gifts.");
+          }
       }
       setProvider(_provider);
       setSigner(_signer);
@@ -102,7 +106,7 @@ export default function CapsulesPage() {
               setAvatar(avt || null);
           }
       } catch (e) { 
-          console.error("Identity lookup error", e); 
+          // Silently handle identity lookup error
       }
   };
 
@@ -141,10 +145,14 @@ export default function CapsulesPage() {
 
   useEffect(() => {
     if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
-    if (window.ethereum) {
+    if (typeof window !== "undefined" && window.ethereum) {
         window.ethereum.on("accountsChanged", (accs: string[]) => {
             if (accs.length === 0) confirmDisconnect();
             else checkConnection();
+        });
+        // RELOAD ON NETWORK CHANGE (Crucial Fix)
+        window.ethereum.on("chainChanged", () => {
+            window.location.reload();
         });
     }
   }, [checkConnection, confirmDisconnect]);
@@ -152,6 +160,18 @@ export default function CapsulesPage() {
   const fetchCapsules = useCallback(async (isSilent = false) => {
     if (!provider || !address) return;
     
+    // Check Chain ID before making calls
+    try {
+        const network = await provider.getNetwork();
+        if (Number(network.chainId) !== 8453) {
+            console.error("Wrong network for data fetching. Chain:", Number(network.chainId));
+            return; // Exit if not on Base, wait for reload
+        }
+    } catch (e) {
+        console.error("Network check failed", e);
+        return;
+    }
+
     if (!isSilent) setIsLoadingData(true);
     else setIsBackgroundLoading(true);
 
@@ -160,25 +180,29 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // BUG FIX: changed limits to >= 0 to include ID 0 (for 0-indexed contracts)
-      const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
+      // RPC-Friendly Sequential Batch Fetcher
+      const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 3) => {
           const results = [];
           for (let i = total; i >= 0; i -= batchSize) {
-              const batch = [];
+              const promises = [];
               for (let j = 0; j < batchSize && (i - j) >= 0; j++) {
-                  batch.push(fetchFn(i - j).catch(() => {
-                      return null; // Ignore errors for non-existent IDs
-                  }));
+                  promises.push(
+                      fetchFn(i - j).catch((err) => {
+                          console.warn(`Missing/Error on ID ${i-j}`);
+                          return null;
+                      })
+                  );
               }
-              results.push(...(await Promise.all(batch)));
-              await new Promise(resolve => setTimeout(resolve, 50));
+              const batchResults = await Promise.all(promises);
+              results.push(...batchResults.filter(Boolean));
+              await new Promise(resolve => setTimeout(resolve, 150)); // Delay prevents RPC block
           }
-          return results.filter(Boolean); // Filter out null results early
+          return results;
       };
 
       try {
           const totalGifts = Number(await contract.giftCounter());
-          console.log("Total Regular Gifts found:", totalGifts);
+          console.log(`Checking up to ${totalGifts} regular gifts...`);
 
           const rawGifts = await fetchInBatches(totalGifts, (id) => contract.getGiftDetails(id));
 
@@ -224,18 +248,18 @@ export default function CapsulesPage() {
                 if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
                 received.push(recData);
               }
-            } catch (err) { console.error("Error parsing gift:", err); }
+            } catch (err) { console.error("Gift Data Parse Error:", err); }
           });
-      } catch (err) { console.error("Error fetching giftCounter:", err); }
+      } catch (err) { console.error("Failed to read giftCounter (Likely Wrong Network):", err); }
 
       try {
           const totalRPs = Number(await contract.redPacketCounter());
-          console.log("Total Red Packets found:", totalRPs);
+          console.log(`Checking up to ${totalRPs} red packets...`);
           const myClaims: { [key: string]: string } = {};
           
           try {
               const currentBlock = await provider.getBlockNumber();
-              const fromBlock = Math.max(0, currentBlock - 10000);
+              const fromBlock = Math.max(0, currentBlock - 50000); // Expanded block range
               const claimFilter = contract.filters.RedPacketClaimed(null, address);
               const rawLogs = await contract.queryFilter(claimFilter, fromBlock, "latest");
               
@@ -246,7 +270,7 @@ export default function CapsulesPage() {
                       myClaims[pId] = val.toString(); 
                   }
               });
-          } catch(e) {} 
+          } catch(e) { console.warn("Event filter failed, relying on fallback...", e); } 
 
           const rawRPs = await fetchInBatches(totalRPs, (id) => contract.getRedPacketDetails(id));
 
@@ -316,7 +340,7 @@ export default function CapsulesPage() {
                                   exactAmountStr = avgAmt.toString();
                               }
                           }
-                      } catch (e) {}
+                      } catch (e) { /* Silently skip if function doesn't exist */ }
                   }
 
                   if (hasClaimed) {
@@ -342,9 +366,9 @@ export default function CapsulesPage() {
                       });
                   }
 
-              } catch (err) { console.error("Error parsing red packet:", err); }
+              } catch (err) { console.error("Red Packet Parse Error:", err); }
           }
-      } catch (err) { console.error("Error fetching redPacketCounter:", err); }
+      } catch (err) { console.error("Failed to read redPacketCounter:", err); }
 
       const sortByIdDesc = (a: any, b: any) => {
           const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
@@ -355,12 +379,13 @@ export default function CapsulesPage() {
       sent.sort(sortByIdDesc);
       received.sort(sortByIdDesc);
 
+      console.log(`Found: ${sent.length} Sent, ${received.length} Received`);
       setMySentCapsules(sent);
       setMyReceivedCapsules(received);
 
       fetchBalances(address, provider);
       
-    } catch (error) { console.error("Fetch Error:", error); } 
+    } catch (error) { console.error("Critical Fetch Error:", error); } 
     finally { 
         setIsLoadingData(false); 
         setIsBackgroundLoading(false);
@@ -372,7 +397,7 @@ export default function CapsulesPage() {
         fetchCapsules(); 
         const interval = setInterval(() => {
             fetchCapsules(true); 
-        }, 10000);
+        }, 15000); // Changed to 15s to reduce RPC load
         return () => clearInterval(interval);
     }
   }, [provider, address, fetchCapsules]);
