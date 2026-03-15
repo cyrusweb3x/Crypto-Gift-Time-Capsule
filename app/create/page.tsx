@@ -13,12 +13,10 @@ import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
 import { motion, AnimatePresence } from "framer-motion";
 
-// NEW ABI 
 import contractAbi from "@/contractAbi.json";
 
-// Updated for Base Mainnet
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
-const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // Base Mainnet USDC
+const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; 
 const CHAIN_ID_HEX = "0x2105"; 
 const CHAIN_ID_DECIMAL = 8453;
 const STORAGE_KEY = "yupp_wallet_connected";
@@ -33,7 +31,6 @@ const ERC20_ABI = [
   "function symbol() view returns (string)"
 ];
 
-// Wallet Hook Updated to Prevent Stale Provider Errors
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
@@ -45,7 +42,7 @@ function useEvmWallet() {
   const checkConnection = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
-        const _provider = new BrowserProvider(window.ethereum);
+        const _provider = new BrowserProvider(window.ethereum, "any");
         const accounts = await _provider.send("eth_accounts", []);
         if (accounts.length > 0) {
             const network = await _provider.getNetwork();
@@ -63,7 +60,7 @@ function useEvmWallet() {
     if (typeof window === "undefined" || !window.ethereum) return;
     setIsConnecting(true);
     try {
-      const _provider = new BrowserProvider(window.ethereum);
+      const _provider = new BrowserProvider(window.ethereum, "any");
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       const network = await _provider.getNetwork();
       if (accounts[0]) {
@@ -94,7 +91,6 @@ function useEvmWallet() {
             if (accs.length === 0) confirmDisconnect();
             else checkConnection();
         });
-        // We removed window.reload() here to prevent abrupt interruptions that cause Network Errors
         window.ethereum.on("chainChanged", () => setTimeout(checkConnection, 1000));
     }
   }, [checkConnection, confirmDisconnect]);
@@ -136,8 +132,24 @@ export default function CreatePage() {
     try {
         const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
         if (currentChainId !== CHAIN_ID_HEX) {
-            await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_ID_HEX }] });
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Allow RPC to settle
+            try {
+                await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_ID_HEX }] });
+            } catch (switchError: any) {
+                // If Base network is not added to user's MetaMask, add it automatically
+                if (switchError.code === 4902) {
+                    await window.ethereum.request({
+                        method: "wallet_addEthereumChain",
+                        params: [{
+                            chainId: CHAIN_ID_HEX,
+                            chainName: "Base",
+                            rpcUrls: ["https://mainnet.base.org"],
+                            nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+                            blockExplorerUrls: ["https://basescan.org"]
+                        }]
+                    });
+                } else { throw switchError; }
+            }
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
         return true;
     } catch {
@@ -148,7 +160,7 @@ export default function CreatePage() {
   const fetchBalances = useCallback(async () => {
     if (!address || !window.ethereum) return;
     try {
-        const _provider = new BrowserProvider(window.ethereum);
+        const _provider = new BrowserProvider(window.ethereum, "any");
         const ethRaw = await _provider.getBalance(address);
         const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, _provider);
         const usdcRaw = await usdcContract.balanceOf(address);
@@ -166,7 +178,7 @@ export default function CreatePage() {
     if (selectedToken === "USDC" && address && window.ethereum) {
       const fetchAllowance = async () => {
         try {
-          const _provider = new BrowserProvider(window.ethereum);
+          const _provider = new BrowserProvider(window.ethereum, "any");
           const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, _provider);
           const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
           setUsdcAllowance(allowance);
@@ -181,17 +193,11 @@ export default function CreatePage() {
         let checkAmount = BigInt(0);
         let cleanAmt = amount || "0";
         if (cleanAmt.charAt(0) === ".") cleanAmt = "0" + cleanAmt;
-        
         try { checkAmount = parseUnits(cleanAmt, usdcDecimals); } catch {}
         
-        if (usdcAllowance < checkAmount && checkAmount > BigInt(0)) { 
-            setNeedsApproval(true); 
-        } else { 
-            setNeedsApproval(false); 
-        }
-    } else { 
-        setNeedsApproval(false); 
-    }
+        if (usdcAllowance < checkAmount && checkAmount > BigInt(0)) { setNeedsApproval(true); } 
+        else { setNeedsApproval(false); }
+    } else { setNeedsApproval(false); }
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
   const handleRecipientChange = async (val: string) => {
@@ -205,7 +211,6 @@ export default function CreatePage() {
     if (safeVal.indexOf(".") !== -1) {
         setIsResolving(true);
         try {
-          // Utilizing a public Mainnet provider uniquely for ENS checks to avoid Base "Network Error"
           const mainnetProvider = ethers.getDefaultProvider("mainnet");
           const resolved = await mainnetProvider.resolveName(safeVal);
           if (resolved) { setResolvedAddress(resolved); } else { setResolvedAddress(""); }
@@ -217,7 +222,8 @@ export default function CreatePage() {
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) { newErrors.amount = "Enter valid amount"; } else {
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) { newErrors.amount = "Enter valid amount"; } 
+    else {
       const bal = selectedToken === "ETH" ? balances.ETH : balances.USDC;
       if (parseFloat(amount) > parseFloat(bal)) newErrors.amount = "Insufficient balance";
     }
@@ -249,29 +255,37 @@ export default function CreatePage() {
       setLoadingStep("IDLE");
       setErrors({}); 
 
-      // 1. Force network check directly before proceeding to prevent Provider race condition
       const checkValidChain = await ensureMainnetChain();
       if (!checkValidChain) { setErrors({ submit: "Failed to switch to Base Mainnet." }); return; }
 
-      // 2. IMPORTANT FIX: Create a FRESH Provider & Signer right before the action 
-      // This completely eliminates stale "Network Error"
-      const activeProvider = new BrowserProvider(window.ethereum);
+      // "any" network is crucial here to prevent Ethers from throwing underlying network changed error
+      const activeProvider = new BrowserProvider(window.ethereum, "any");
+      await activeProvider.getNetwork(); // Force sync
       const activeSigner = await activeProvider.getSigner();
       
       const ethBalRaw = await activeProvider.getBalance(address);
-      if (ethBalRaw === BigInt(0)) {
-          setErrors({ submit: "You need some ETH on Base Mainnet to pay for Gas fees!" });
-          return;
-      }
-
-      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, activeSigner);
-      const giftContract = new Contract(CONTRACT_ADDRESS, contractAbi, activeSigner);
-      
       const decimals = selectedToken === "ETH" ? 18 : usdcDecimals;
       
       let cleanAmount = amount;
       if (cleanAmount.charAt(0) === ".") cleanAmount = "0" + cleanAmount;
       const amountWei = parseUnits(cleanAmount, decimals);
+
+      // Gas Fee Buffer Logic (Important fix for Network/Payload error)
+      if (selectedToken === "ETH") {
+          const estimatedGasBuffer = parseUnits("0.0003", 18); // Keep 0.0003 ETH for gas
+          if (ethBalRaw < (amountWei + estimatedGasBuffer)) {
+              setErrors({ submit: "Insufficient ETH. Leave at least 0.0003 ETH in your wallet to pay for Gas fees." });
+              return;
+          }
+      } else {
+          if (ethBalRaw === BigInt(0)) {
+              setErrors({ submit: "You need some ETH on Base Mainnet to pay for Gas fees!" });
+              return;
+          }
+      }
+
+      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, activeSigner);
+      const giftContract = new Contract(CONTRACT_ADDRESS, contractAbi, activeSigner);
       
       const unlockTimestamp = Math.floor(new Date(`${unlockDate}T${unlockTime}`).getTime() / 1000);
       const unlockTimeBigInt = BigInt(unlockTimestamp);
@@ -373,15 +387,15 @@ export default function CreatePage() {
       else if (err?.error?.message) { errorMsg = String(err.error.message); } 
       else if (err?.shortMessage) { errorMsg = String(err.shortMessage); } 
       else if (err?.reason) { errorMsg = String(err.reason); } 
-      else if (err?.message) { errorMsg = String(err.message).length > 80 ? String(err.message).substring(0, 80) + "..." : String(err.message); }
+      else if (err?.message) { errorMsg = String(err.message).length > 100 ? String(err.message).substring(0, 100) + "..." : String(err.message); }
 
       const safeErrorMsg = String(errorMsg).toLowerCase();
 
-      // Better Network error handling translation
+      // Better raw error logging to user so we know exactly what failed
       if (safeErrorMsg.indexOf("network error") !== -1 || safeErrorMsg.indexOf("fetch payload") !== -1) {
-          errorMsg = "Network Error: Stable connection to Base RPC lost. Try again.";
+          errorMsg = `RPC/Network Error: RPC connection failed or Gas estimation failed. Details: ${errorMsg}`;
       } else if (safeErrorMsg.indexOf("insufficient funds") !== -1 || safeErrorMsg.indexOf("gas required exceeds allowance") !== -1) {
-          errorMsg = "Not enough ETH to pay for transaction gas fees on Base.";
+          errorMsg = "Not enough ETH to pay for transaction amount + gas fees on Base.";
       } else if (safeErrorMsg.indexOf("transfer amount exceeds balance") !== -1) {
           errorMsg = "Your USDC balance is too low.";
       } else if (safeErrorMsg.indexOf("require") !== -1 || safeErrorMsg.indexOf("reverted") !== -1) {
