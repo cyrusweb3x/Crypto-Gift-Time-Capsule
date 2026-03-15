@@ -306,15 +306,25 @@ export default function CreatePage() {
           setGeneratedLink(`${window.location.origin}/packet/${finalId}`);
           setShowLinkModal(true);
       } else {
+          // ==========================================
+          // এখানে কোডটি ফিক্স করা হয়েছে (Fixed Code)
+          // ==========================================
+          const assetType = selectedToken === "ETH" ? 0 : 1; 
+          const tokenId = 0; 
+
           tx = await giftContract.createGift(
-              resolvedAddress, 
-              tokenArg, 
-              amountWei, 
-              unlockTimeBigInt, 
-              isAnonymous,        
-              obfuscatedMessage,  
-              txOptions
+              assetType,          // 1. AssetType (0 for ETH, 1 for ERC20)
+              tokenArg,           // 2. Token Address
+              tokenId,            // 3. Token ID (0 for ETH/USDC)
+              amountWei,          // 4. Amount
+              resolvedAddress,    // 5. Recipient
+              unlockTimeBigInt,   // 6. Unlock Time
+              isAnonymous,        // 7. Is Anonymous
+              obfuscatedMessage,  // 8. Message
+              txOptions           // Value (ETH amount if native)
           );
+          // ==========================================
+
           await tx.wait();
           
           setSuccessData({
