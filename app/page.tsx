@@ -11,22 +11,13 @@ import { Lock, Diamond, Shield, Gift, ArrowRight, AlertCircle, Users } from "luc
 import { ethers, BrowserProvider, Contract, formatEther, formatUnits, JsonRpcProvider } from "ethers";
 import { Button } from "@/components/ui/button";
 import { sdk } from "@farcaster/miniapp-sdk";
+import contractAbi from "@/contractAbi.json";
 
 // Contract Configuration 
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
 const BASE_CHAIN_ID = "0x2105"; // 8453 in hex
 const BASE_CHAIN_ID_BIGINT = BigInt(8453);
 const PUBLIC_RPC = "https://mainnet.base.org"; 
-
-// Extended ABI for reading data (fixes missing getter functions in default ABI)
-const READ_ABI = [
-  "function giftCounter() view returns (uint256)",
-  "function redPacketCounter() view returns (uint256)",
-  "function getGiftDetails(uint256) view returns (uint256 id, uint8 assetType, address sender, address recipient, address tokenAddress, uint256 tokenId, uint256 amount, uint256 unlockTime, bool isAnonymous, bool isWithdrawn, string message)",
-  "function gifts(uint256) view returns (uint256 id, uint8 assetType, address sender, address recipient, address tokenAddress, uint256 tokenId, uint256 amount, uint256 unlockTime, bool isAnonymous, bool isWithdrawn, string message)",
-  "function getRedPacketDetails(uint256) view returns (uint256 id, address sender, address tokenAddress, uint256 totalAmount, uint256 remainingAmount, uint256 totalClaimers, uint256 remainingClaimers, uint256 unlockTime, bool isRandom, bool isAnonymous, bool isCancelled, string message)",
-  "function redPackets(uint256) view returns (uint256 id, address sender, address tokenAddress, uint256 totalAmount, uint256 remainingAmount, uint256 totalClaimers, uint256 remainingClaimers, uint256 unlockTime, bool isRandom, bool isAnonymous, bool isCancelled, string message)"
-];
 
 export default function HomePage() {
   const [isConnected, setIsConnected] = useState(false);
@@ -43,9 +34,7 @@ export default function HomePage() {
     const initSdk = async () => {
       try {
         sdk.actions.ready();
-      } catch (error) {
-        console.error("SDK initialization failed", error);
-      }
+      } catch (error) {}
     };
     initSdk();
   }, []);
@@ -60,9 +49,7 @@ export default function HomePage() {
         setIsConnected(true);
         localStorage.setItem("yupp_wallet_connected", "true");
       }
-    } catch (error) {
-      console.error("Silent connection failed", error);
-    }
+    } catch (error) {}
   }, []);
 
   const handleConnect = useCallback(async () => {
@@ -79,15 +66,13 @@ export default function HomePage() {
               method: "wallet_switchEthereumChain",
               params: [{ chainId: BASE_CHAIN_ID }],
             });
-          } catch (error) { console.error(error); }
+          } catch (error) {}
         }
         setAddress(accounts[0]);
         setIsConnected(true);
         localStorage.setItem("yupp_wallet_connected", "true");
       }
-    } catch (error) {
-      console.error("Connection Failed", error);
-    }
+    } catch (error) {}
   }, []);
 
   const confirmDisconnect = useCallback(() => {
@@ -98,78 +83,52 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (localStorage.getItem("yupp_wallet_connected") === "true") {
-        checkConnection();
-    }
+    if (localStorage.getItem("yupp_wallet_connected") === "true") checkConnection();
     if (window.ethereum) {
         window.ethereum.on("accountsChanged", (accs: string[]) => {
-            if (accs.length > 0) {
-                setAddress(accs[0]);
-                setIsConnected(true);
-            } else {
-                confirmDisconnect();
-            }
+            if (accs.length > 0) { setAddress(accs[0]); setIsConnected(true); } 
+            else { confirmDisconnect(); }
         });
     }
   }, [checkConnection, confirmDisconnect]);
 
+  // Read data via Event Logs bypass the private mapping restrictions
   useEffect(() => {
     const fetchStats = async () => {
       try {
         const provider = new JsonRpcProvider(PUBLIC_RPC);
-        const contract = new Contract(CONTRACT_ADDRESS, READ_ABI, provider);
+        const contract = new Contract(CONTRACT_ADDRESS, contractAbi, provider);
         
         let totalGiftsCount = 0;
         let totalEthValue = 0;
         let totalUsdcValue = 0;
 
-        // Fetch Regular Gifts Stats
         try {
-            const counter = await contract.giftCounter();
-            totalGiftsCount += Number(counter);
-            
-            for (let i = 1; i <= Number(counter); i++) {
-                try {
-                    let gift;
-                    if (contract.getGiftDetails) gift = await contract.getGiftDetails(i);
-                    else gift = await contract.gifts(i);
-
-                    if (gift) {
-                        const tokenAddr = gift.tokenAddress;
-                        const amount = gift.amount;
-                        if (tokenAddr === ethers.ZeroAddress) {
-                            totalEthValue += parseFloat(formatEther(amount));
-                        } else {
-                            totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
-                        }
-                    }
-                } catch(e) {}
-            }
-        } catch(e) { console.warn("Gift stats fetch error"); }
-
-        // Fetch Red Packets Stats
-        try {
+            const giftCounter = await contract.giftCounter();
             const rpCounter = await contract.redPacketCounter();
-            totalGiftsCount += Number(rpCounter);
-            
-            for (let i = 1; i <= Number(rpCounter); i++) {
-                try {
-                    let rp;
-                    if (contract.getRedPacketDetails) rp = await contract.getRedPacketDetails(i);
-                    else rp = await contract.redPackets(i);
+            totalGiftsCount = Number(giftCounter) + Number(rpCounter);
 
-                    if (rp) {
-                        const tokenAddr = rp.tokenAddress || ethers.ZeroAddress;
-                        const amount = rp.totalAmount;
-                        if (tokenAddr === ethers.ZeroAddress) {
-                            totalEthValue += parseFloat(formatEther(amount));
-                        } else {
-                            totalUsdcValue += parseFloat(formatUnits(amount, 6)); 
-                        }
-                    }
-                } catch(e) {}
-            }
-        } catch(e) { console.warn("Red Packet stats fetch error"); }
+            // Fetch creation events from recent blocks
+            const blockNum = await provider.getBlockNumber();
+            const startBlock = Math.max(0, blockNum - 200000); // Last few days depending on Base block speed
+
+            const giftLogs = await contract.queryFilter(contract.filters.GiftCreated(), startBlock, "latest");
+            giftLogs.forEach((log: any) => {
+                const token = log.args[4];
+                const amt = log.args[6];
+                if (token === ethers.ZeroAddress) totalEthValue += parseFloat(formatEther(amt));
+                else totalUsdcValue += parseFloat(formatUnits(amt, 6));
+            });
+
+            const rpLogs = await contract.queryFilter(contract.filters.RedPacketCreated(), startBlock, "latest");
+            rpLogs.forEach((log: any) => {
+                const token = log.args[2];
+                const amt = log.args[3];
+                if (token === ethers.ZeroAddress) totalEthValue += parseFloat(formatEther(amt));
+                else totalUsdcValue += parseFloat(formatUnits(amt, 6));
+            });
+
+        } catch (e) {}
 
         setStats({
           giftsSent: totalGiftsCount.toString(),
@@ -178,7 +137,6 @@ export default function HomePage() {
         });
 
       } catch (error) { 
-          console.error("Stats logic error:", error); 
           setStats({ giftsSent: "0", ethLocked: "0.00", usdcLocked: "0.00" });
       }
     };
@@ -188,12 +146,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
-      <Header 
-        isConnected={isConnected} 
-        address={address} 
-        onConnect={handleConnect} 
-        onDisconnect={() => setShowDisconnectAlert(true)} 
-      />
+      <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={() => setShowDisconnectAlert(true)} />
 
       <main className="mx-auto max-w-[480px] px-6 py-8">
         <section className="mb-12 flex flex-col items-center text-center">
@@ -230,7 +183,6 @@ export default function HomePage() {
           <div className="space-y-4">
              <TrustLink href={`https://basescan.org/address/${CONTRACT_ADDRESS}#code`} text="View Contract on Basescan" />
              <TrustLink href="https://github.com/cyrusweb3x/Crypto-Gift-Time-Capsule" text="View Source Code" />
-             <TrustLink href="#" text="View Audit Report" />
           </div>
         </section>
 
@@ -238,12 +190,7 @@ export default function HomePage() {
       </main>
 
       <BottomNav />
-
-      <DisconnectModal 
-        isOpen={showDisconnectAlert} 
-        onClose={() => setShowDisconnectAlert(false)} 
-        onConfirm={confirmDisconnect} 
-      />
+      <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
     </div>
   );
 }
