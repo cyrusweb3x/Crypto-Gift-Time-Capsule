@@ -150,7 +150,7 @@ export default function CapsulesPage() {
             if (accs.length === 0) confirmDisconnect();
             else checkConnection();
         });
-        // RELOAD ON NETWORK CHANGE (Crucial Fix)
+        // RELOAD ON NETWORK CHANGE
         window.ethereum.on("chainChanged", () => {
             window.location.reload();
         });
@@ -165,7 +165,7 @@ export default function CapsulesPage() {
         const network = await provider.getNetwork();
         if (Number(network.chainId) !== 8453) {
             console.error("Wrong network for data fetching. Chain:", Number(network.chainId));
-            return; // Exit if not on Base, wait for reload
+            return;
         }
     } catch (e) {
         console.error("Network check failed", e);
@@ -180,12 +180,12 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // RPC-Friendly Sequential Batch Fetcher
+      // RPC-Friendly Sequential Batch Fetcher (Updated id limits to stop at > 0)
       const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 3) => {
           const results = [];
-          for (let i = total; i >= 0; i -= batchSize) {
+          for (let i = total; i > 0; i -= batchSize) {
               const promises = [];
-              for (let j = 0; j < batchSize && (i - j) >= 0; j++) {
+              for (let j = 0; j < batchSize && (i - j) > 0; j++) {
                   promises.push(
                       fetchFn(i - j).catch((err) => {
                           console.warn(`Missing/Error on ID ${i-j}`);
@@ -200,58 +200,73 @@ export default function CapsulesPage() {
           return results;
       };
 
+      // --- REGULAR GIFTS ---
       try {
           const totalGifts = Number(await contract.giftCounter());
           console.log(`Checking up to ${totalGifts} regular gifts...`);
 
-          const rawGifts = await fetchInBatches(totalGifts, (id) => contract.getGiftDetails(id));
+          // Universal Function Detector
+          const hasGetGiftDetails = typeof contract.getGiftDetails === "function";
+          const hasGetGift = typeof contract.getGift === "function";
+          const hasGifts = typeof contract.gifts === "function";
 
-          rawGifts.forEach((gift: any) => {
-            if (!gift) return;
-            try {
-              const gId = (gift.id ?? gift[0]).toString();
-              const gSender = (gift.sender ?? gift[1]).toString();
-              const gRecipient = (gift.recipient ?? gift[2]).toString();
-              const gTokenAddress = (gift.tokenAddress ?? gift[3]).toString();
-              const gAmount = gift.amount ?? gift[4];
-              const gUnlockTime = gift.unlockTime ?? gift[5];
-              const gIsAnonymous = gift.isAnonymous ?? gift[6];
-              const gIsWithdrawn = gift.isWithdrawn ?? gift[7];
-              const gMessage = gift.message ?? gift[9] ?? "";
+          if (totalGifts > 0 && (hasGetGiftDetails || hasGetGift || hasGifts)) {
+              const rawGifts = await fetchInBatches(totalGifts, (id) => {
+                  if (hasGetGiftDetails) return contract.getGiftDetails(id);
+                  if (hasGetGift) return contract.getGift(id);
+                  return contract.gifts(id); // fallback mapped getter
+              });
 
-              if (!gSender || !gRecipient) return;
+              rawGifts.forEach((gift: any) => {
+                if (!gift) return;
+                try {
+                  // Universal data unwrapper (supports both newer structs and older Tuples arrays)
+                  const gId = (gift.id ?? gift[0]).toString();
+                  const gSender = (gift.sender ?? gift[1]).toString();
+                  const gRecipient = (gift.recipient ?? gift[2]).toString();
+                  const gTokenAddress = (gift.tokenAddress ?? gift[3]).toString();
+                  const gAmount = gift.amount ?? gift[4];
+                  const gUnlockTime = gift.unlockTime ?? gift[5];
+                  const gIsAnonymous = gift.isAnonymous ?? gift[6];
+                  const gIsWithdrawn = gift.isWithdrawn ?? gift[7];
+                  const gMessage = gift.message ?? gift[9] ?? "";
 
-              const isSender = gSender.toLowerCase() === address.toLowerCase();
-              const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
+                  if (!gSender || !gRecipient) return;
 
-              if (!isSender && !isRecipient) return;
+                  const isSender = gSender.toLowerCase() === address.toLowerCase();
+                  const isRecipient = gRecipient.toLowerCase() === address.toLowerCase();
 
-              const { content, isAnonymous } = parseGiftMessage(gMessage);
-              const isEth = (gTokenAddress === ethers.ZeroAddress);
-              const tokenSymbol = isEth ? "ETH" : "USDC";
-              const decimals = isEth ? 18 : 6; 
-              const formattedAmount = formatUnits(gAmount, decimals);
-              const unlockDate = new Date(Number(gUnlockTime) * 1000);
-              const isUnlocked = new Date() >= unlockDate;
-              
-              const baseData = {
-                id: `gift-${gId}`,
-                sender: gSender, recipient: gRecipient, amount: formattedAmount,
-                token: tokenSymbol, unlockDate: unlockDate, isUnlocked: isUnlocked,
-                isWithdrawn: gIsWithdrawn, isAnonymous: isAnonymous || gIsAnonymous,
-                message: content, realMessage: content, txHash: "", isRedPacket: false
-              };
+                  if (!isSender && !isRecipient) return;
 
-              if (isSender) sent.push(baseData);
-              if (isRecipient) {
-                const recData = { ...baseData };
-                if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
-                received.push(recData);
-              }
-            } catch (err) { console.error("Gift Data Parse Error:", err); }
-          });
-      } catch (err) { console.error("Failed to read giftCounter (Likely Wrong Network):", err); }
+                  const { content, isAnonymous } = parseGiftMessage(gMessage);
+                  const isEth = (gTokenAddress === ethers.ZeroAddress);
+                  const tokenSymbol = isEth ? "ETH" : "USDC";
+                  const decimals = isEth ? 18 : 6; 
+                  const formattedAmount = formatUnits(gAmount, decimals);
+                  const unlockDate = new Date(Number(gUnlockTime) * 1000);
+                  const isUnlocked = new Date() >= unlockDate;
+                  
+                  const baseData = {
+                    id: `gift-${gId}`,
+                    sender: gSender, recipient: gRecipient, amount: formattedAmount,
+                    token: tokenSymbol, unlockDate: unlockDate, isUnlocked: isUnlocked,
+                    isWithdrawn: gIsWithdrawn, isAnonymous: isAnonymous || gIsAnonymous,
+                    message: content, realMessage: content, txHash: "", isRedPacket: false
+                  };
 
+                  if (isSender) sent.push(baseData);
+                  if (isRecipient) {
+                    const recData = { ...baseData };
+                    if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
+                    received.push(recData);
+                  }
+                } catch (err) { console.error("Gift Data Parse Error:", err); }
+              });
+          }
+      } catch (err) { console.error("Failed to read regular gifts:", err); }
+
+
+      // --- RED PACKETS ---
       try {
           const totalRPs = Number(await contract.redPacketCounter());
           console.log(`Checking up to ${totalRPs} red packets...`);
@@ -259,7 +274,7 @@ export default function CapsulesPage() {
           
           try {
               const currentBlock = await provider.getBlockNumber();
-              const fromBlock = Math.max(0, currentBlock - 50000); // Expanded block range
+              const fromBlock = Math.max(0, currentBlock - 50000); 
               const claimFilter = contract.filters.RedPacketClaimed(null, address);
               const rawLogs = await contract.queryFilter(claimFilter, fromBlock, "latest");
               
@@ -270,105 +285,117 @@ export default function CapsulesPage() {
                       myClaims[pId] = val.toString(); 
                   }
               });
-          } catch(e) { console.warn("Event filter failed, relying on fallback...", e); } 
+          } catch(e) { console.warn("Event filter failed, relying on fallback..."); } 
 
-          const rawRPs = await fetchInBatches(totalRPs, (id) => contract.getRedPacketDetails(id));
+          // Universal Function Detector 
+          const hasGetRPDetails = typeof contract.getRedPacketDetails === "function";
+          const hasGetRP = typeof contract.getRedPacket === "function";
+          const hasRPs = typeof contract.redPackets === "function";
 
-          for (const rp of rawRPs) {
-              if (!rp) continue;
-              try {
-                  const rpId = rp[0].toString();
-                  const rpSender = rp[1].toString();
-                  const rpTokenAddress = rp[2].toString();
-                  const rpTotalAmount = rp[3];
-                  const rpRemainingAmount = rp[4];
-                  const rpTotalClaimers = Number(rp[5]);
-                  const rpRemainingClaimers = Number(rp[6]);
-                  const rpUnlockTime = rp[7];
-                  const rpIsAnonymous = rp[9];
-                  const rpIsCancelled = rp[10];
-                  const rpMessage = rp[11] || "";
+          if (totalRPs > 0 && (hasGetRPDetails || hasGetRP || hasRPs)) {
+              const rawRPs = await fetchInBatches(totalRPs, (id) => {
+                  if (hasGetRPDetails) return contract.getRedPacketDetails(id);
+                  if (hasGetRP) return contract.getRedPacket(id);
+                  return contract.redPackets(id);
+              });
 
-                  if (!rpSender || rpSender === ethers.ZeroAddress) continue;
+              for (const rp of rawRPs) {
+                  if (!rp) continue;
+                  try {
+                      // Universal data unwrapper
+                      const rpId = (rp.id ?? rp[0]).toString();
+                      const rpSender = (rp.sender ?? rp[1]).toString();
+                      const rpTokenAddress = (rp.tokenAddress ?? rp[2]).toString();
+                      const rpTotalAmount = rp.totalAmount ?? rp[3];
+                      const rpRemainingAmount = rp.remainingAmount ?? rp[4];
+                      const rpTotalClaimers = Number(rp.totalClaimers ?? rp[5]);
+                      const rpRemainingClaimers = Number(rp.remainingClaimers ?? rp[6]);
+                      const rpUnlockTime = rp.unlockTime ?? rp[7];
+                      const rpIsAnonymous = rp.isAnonymous ?? rp[9];
+                      const rpIsCancelled = rp.isCancelled ?? rp[10];
+                      const rpMessage = rp.message ?? rp[11] ?? "";
 
-                  const { content, isAnonymous } = parseGiftMessage(rpMessage);
-                  const isEth = rpTokenAddress === ethers.ZeroAddress;
-                  const tokenSymbol = isEth ? "ETH" : "USDC";
-                  const decimals = isEth ? 18 : 6;
-                  
-                  const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
-                  const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
+                      if (!rpSender || rpSender === ethers.ZeroAddress) continue;
 
-                  if (rpSender.toLowerCase() === address.toLowerCase()) {
-                      sent.push({
-                          id: `rp-${rpId}`,
-                          sender: rpSender,
-                          recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
-                          amount: formatUnits(rpTotalAmount, decimals),
-                          token: tokenSymbol,
-                          unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
-                          isUnlocked: true,
-                          isWithdrawn: isEnded, 
-                          isAnonymous: isAnonymous || rpIsAnonymous,
-                          message: content,
-                          realMessage: content,
-                          txHash: "",
-                          isRedPacket: true
-                      });
-                  }
+                      const { content, isAnonymous } = parseGiftMessage(rpMessage);
+                      const isEth = rpTokenAddress === ethers.ZeroAddress;
+                      const tokenSymbol = isEth ? "ETH" : "USDC";
+                      const decimals = isEth ? 18 : 6;
+                      
+                      const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
+                      const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
 
-                  let hasClaimed = false;
-                  let exactAmountStr = "";
-
-                  if (myClaims[rpId]) {
-                      hasClaimed = true;
-                      exactAmountStr = formatUnits(myClaims[rpId], decimals);
-                  } else {
-                      try {
-                          const userClaimed = await contract.hasClaimedRedPacket(rpId, address);
-                          if (userClaimed) {
-                              hasClaimed = true;
-                              
-                              let fetchedExact = null;
-                              try { fetchedExact = await contract.claimedAmounts(rpId, address); } catch(e){}
-                              if(!fetchedExact) { try { fetchedExact = await contract.getClaimedAmount(rpId, address); } catch(e){} }
-                              
-                              if (fetchedExact && Number(fetchedExact) > 0) {
-                                  exactAmountStr = formatUnits(fetchedExact, decimals);
-                              } else {
-                                  const avgAmt = Number(formatUnits(rpTotalAmount, decimals)) / rpTotalClaimers;
-                                  exactAmountStr = avgAmt.toString();
-                              }
-                          }
-                      } catch (e) { /* Silently skip if function doesn't exist */ }
-                  }
-
-                  if (hasClaimed) {
-                      let displayAmt = exactAmountStr;
-                      if (displayAmt) {
-                          displayAmt = parseFloat(displayAmt).toFixed(6).replace(/\.?0+$/, '');
+                      if (rpSender.toLowerCase() === address.toLowerCase()) {
+                          sent.push({
+                              id: `rp-${rpId}`,
+                              sender: rpSender,
+                              recipient: `Red Packet (${claimedCount}/${rpTotalClaimers} Claimed)`,
+                              amount: formatUnits(rpTotalAmount, decimals),
+                              token: tokenSymbol,
+                              unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
+                              isUnlocked: true,
+                              isWithdrawn: isEnded, 
+                              isAnonymous: isAnonymous || rpIsAnonymous,
+                              message: content,
+                              realMessage: content,
+                              txHash: "",
+                              isRedPacket: true
+                          });
                       }
 
-                      received.push({
-                          id: `rp-claim-${rpId}`,
-                          sender: rpSender,
-                          recipient: address,
-                          amount: displayAmt,
-                          token: tokenSymbol,
-                          unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
-                          isUnlocked: true,
-                          isWithdrawn: true, 
-                          isAnonymous: isAnonymous || rpIsAnonymous,
-                          message: content,
-                          realMessage: content,
-                          txHash: "",
-                          isRedPacket: true
-                      });
-                  }
+                      let hasClaimed = false;
+                      let exactAmountStr = "";
 
-              } catch (err) { console.error("Red Packet Parse Error:", err); }
+                      if (myClaims[rpId]) {
+                          hasClaimed = true;
+                          exactAmountStr = formatUnits(myClaims[rpId], decimals);
+                      } else {
+                          try {
+                              const userClaimed = await contract.hasClaimedRedPacket(rpId, address);
+                              if (userClaimed) {
+                                  hasClaimed = true;
+                                  
+                                  let fetchedExact = null;
+                                  try { fetchedExact = await contract.claimedAmounts(rpId, address); } catch(e){}
+                                  if(!fetchedExact) { try { fetchedExact = await contract.getClaimedAmount(rpId, address); } catch(e){} }
+                                  
+                                  if (fetchedExact && Number(fetchedExact) > 0) {
+                                      exactAmountStr = formatUnits(fetchedExact, decimals);
+                                  } else {
+                                      const avgAmt = Number(formatUnits(rpTotalAmount, decimals)) / rpTotalClaimers;
+                                      exactAmountStr = avgAmt.toString();
+                                  }
+                              }
+                          } catch (e) { /* Silently skip if function doesn't exist */ }
+                      }
+
+                      if (hasClaimed) {
+                          let displayAmt = exactAmountStr;
+                          if (displayAmt) {
+                              displayAmt = parseFloat(displayAmt).toFixed(6).replace(/\.?0+$/, '');
+                          }
+
+                          received.push({
+                              id: `rp-claim-${rpId}`,
+                              sender: rpSender,
+                              recipient: address,
+                              amount: displayAmt,
+                              token: tokenSymbol,
+                              unlockDate: Number(rpUnlockTime) > 0 ? new Date(Number(rpUnlockTime) * 1000) : new Date(),
+                              isUnlocked: true,
+                              isWithdrawn: true, 
+                              isAnonymous: isAnonymous || rpIsAnonymous,
+                              message: content,
+                              realMessage: content,
+                              txHash: "",
+                              isRedPacket: true
+                          });
+                      }
+
+                  } catch (err) { console.error("Red Packet Parse Error:", err); }
+              }
           }
-      } catch (err) { console.error("Failed to read redPacketCounter:", err); }
+      } catch (err) { console.error("Failed to read red packets:", err); }
 
       const sortByIdDesc = (a: any, b: any) => {
           const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
@@ -397,7 +424,7 @@ export default function CapsulesPage() {
         fetchCapsules(); 
         const interval = setInterval(() => {
             fetchCapsules(true); 
-        }, 15000); // Changed to 15s to reduce RPC load
+        }, 15000); 
         return () => clearInterval(interval);
     }
   }, [provider, address, fetchCapsules]);
