@@ -14,19 +14,16 @@ import { cn } from "@/lib/utils";
 import { ethers, BrowserProvider, Contract, formatUnits, formatEther } from "ethers";
 import contractAbi from "@/contractAbi.json";
 
-// OnchainKit Identity Imports
 import { getName, getAvatar } from "@coinbase/onchainkit/identity";
 import { base } from "viem/chains";
 
-// Updated for Base Mainnet
 const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
 const BASE_CHAIN_ID = "0x2105"; // 8453
 const STORAGE_KEY = "yupp_wallet_connected";
 
-const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // Base Mainnet USDC
+const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
-// Helpers
 const parseGiftMessage = (rawMsg: string) => {
     try {
       const decoded = atob(rawMsg);
@@ -66,7 +63,6 @@ export default function CapsulesPage() {
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
 
-  // --- Wallet Connection & Balance Logic ---
   const fetchBalances = async (acc: string, _provider: BrowserProvider) => {
       try {
           const bal = await _provider.getBalance(acc);
@@ -98,7 +94,6 @@ export default function CapsulesPage() {
       
       await fetchBalances(acc, _provider);
       
-      // --- UPDATED: OnchainKit Identity Fetching ---
       try {
           const name = await getName({ address: acc as `0x${string}`, chain: base });
           if (name) {
@@ -154,7 +149,6 @@ export default function CapsulesPage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // --- Optimized Data Fetching Logic (Fixed RPC Limits & Sorting) ---
   const fetchCapsules = useCallback(async (isSilent = false) => {
     if (!provider || !address) return;
     
@@ -177,13 +171,11 @@ export default function CapsulesPage() {
                   }));
               }
               results.push(...(await Promise.all(batch)));
-              // Added delay to prevent RPC rate limiting
               await new Promise(resolve => setTimeout(resolve, 100));
           }
           return results;
       };
 
-      // 1. Fetch Normal Gifts
       try {
           const totalGifts = Number(await contract.giftCounter());
           const rawGifts = await fetchInBatches(totalGifts, (id) => contract.getGiftDetails(id));
@@ -217,7 +209,7 @@ export default function CapsulesPage() {
               const isUnlocked = new Date() >= unlockDate;
               
               const baseData = {
-                id: `gift-${gId}`, // Prefix to avoid ID collision
+                id: `gift-${gId}`,
                 sender: gSender, recipient: gRecipient, amount: formattedAmount,
                 token: tokenSymbol, unlockDate: unlockDate, isUnlocked: isUnlocked,
                 isWithdrawn: gIsWithdrawn, isAnonymous: isAnonymous || gIsAnonymous,
@@ -234,14 +226,13 @@ export default function CapsulesPage() {
           });
       } catch (err) { }
 
-      // 2. Fetch Red Packets
       try {
           const totalRPs = Number(await contract.redPacketCounter());
           const myClaims: { [key: string]: string } = {};
           
           try {
               const currentBlock = await provider.getBlockNumber();
-              const fromBlock = Math.max(0, currentBlock - 10000); // Safer block range
+              const fromBlock = Math.max(0, currentBlock - 10000);
               const claimFilter = contract.filters.RedPacketClaimed(null, address);
               const rawLogs = await contract.queryFilter(claimFilter, fromBlock, "latest");
               
@@ -281,7 +272,6 @@ export default function CapsulesPage() {
                   const claimedCount = rpTotalClaimers > 0 ? rpTotalClaimers - rpRemainingClaimers : 0;
                   const isEnded = (rpRemainingClaimers === 0 && rpTotalClaimers > 0) || Number(rpRemainingAmount) === 0 || rpIsCancelled;
 
-                  // --- Sent Tab (Created Red Packets) ---
                   if (rpSender.toLowerCase() === address.toLowerCase()) {
                       sent.push({
                           id: `rp-${rpId}`,
@@ -300,7 +290,6 @@ export default function CapsulesPage() {
                       });
                   }
 
-                  // --- Received Tab (Claimed Red Packets) ---
                   let hasClaimed = false;
                   let exactAmountStr = "";
 
@@ -313,7 +302,6 @@ export default function CapsulesPage() {
                           if (userClaimed) {
                               hasClaimed = true;
                               
-                              // Attempt to fetch exact claimed amount from mapping if possible
                               let fetchedExact = null;
                               try { fetchedExact = await contract.claimedAmounts(rpId, address); } catch(e){}
                               if(!fetchedExact) { try { fetchedExact = await contract.getClaimedAmount(rpId, address); } catch(e){} }
@@ -321,7 +309,6 @@ export default function CapsulesPage() {
                               if (fetchedExact && Number(fetchedExact) > 0) {
                                   exactAmountStr = formatUnits(fetchedExact, decimals);
                               } else {
-                                  // Fallback: Calculate Average/Estimated Amount
                                   const avgAmt = Number(formatUnits(rpTotalAmount, decimals)) / rpTotalClaimers;
                                   exactAmountStr = avgAmt.toString();
                               }
@@ -356,11 +343,10 @@ export default function CapsulesPage() {
           }
       } catch (err) { }
 
-      // --- Sorter Function (Mixes Gifts and Red Packets, Newest First) ---
       const sortByIdDesc = (a: any, b: any) => {
           const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
           const numB = parseInt(b.id.toString().replace(/\D/g, '')) || 0;
-          return numB - numA; // Sorts descending (highest ID at the top)
+          return numB - numA;
       };
 
       sent.sort(sortByIdDesc);
@@ -378,7 +364,6 @@ export default function CapsulesPage() {
     }
   }, [provider, address]);
 
-  // --- Auto Reload System (Refreshes data every 10 seconds) ---
   useEffect(() => {
     if (provider && address) {
         fetchCapsules(); 
@@ -389,7 +374,6 @@ export default function CapsulesPage() {
     }
   }, [provider, address, fetchCapsules]);
 
-  // --- Auto Unlock Timer ---
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
     const setupTimers = (capsules: any[], setCapsules: any) => {
@@ -412,7 +396,6 @@ export default function CapsulesPage() {
     return () => timers.forEach(clearTimeout);
   }, [myReceivedCapsules, mySentCapsules]);
 
-  // --- Claim Normal Gift ---
   const handleClaim = async () => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
     setIsClaiming(true);
@@ -453,7 +436,6 @@ export default function CapsulesPage() {
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
-            {/* Wallet Balances Card */}
             <div className="mb-8 rounded-3xl bg-secondary p-6">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-4">
@@ -482,20 +464,17 @@ export default function CapsulesPage() {
               </div>
             </div>
 
-            {/* Controls */}
             <div className="mb-6 flex rounded-full bg-secondary p-1">
               <TabButton isActive={activeTab === "received"} onClick={() => setActiveTab("received")} label="Received" />
               <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
             </div>
 
-            {/* Filter Chips */}
             <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
               <FilterChip isActive={filter === "all"} onClick={() => setFilter("all")} label="All" />
               <FilterChip isActive={filter === "ETH"} onClick={() => setFilter("ETH")} label="ETH" />
               <FilterChip isActive={filter === "USDC"} onClick={() => setFilter("USDC")} label="USDC" />
             </div>
 
-            {/* List Header */}
             <div className="flex justify-between items-center mb-4">
                <h3 className="font-bold text-lg flex items-center gap-2">
                    {activeTab === "sent" ? "Sent Gifts" : "Inbox"}
@@ -524,19 +503,7 @@ export default function CapsulesPage() {
                       txHash={c.txHash} 
                       isWithdrawn={c.isWithdrawn} 
                     />
-                  )) : <EmptyState icon={<Gift />} title="No gifts sent"
-
-<think>
-
-**Analyzing the Changes**
-
-\n\n
-
-আমি এখন মূল কোডটিতে শুধুমাত্র `fetchInBatches` ফাংশনটির পরিবর্তনগুলি প্রয়োগ করছি, যেমন ত্রুটি লগিং এবং বিলম্ব যোগ করা হয়েছে। কোডের বিন্যাস এবং মন্তব্যগুলি যাচাই করছি, নিশ্চিত করছি যে কোনও অপ্রত্যাশিত পরিবর্তন নেই। সবকিছু প্রস্তুত, এখন চূড়ান্ত প্রতিক্রিয়া তৈরি করব।
-
-</think>
-
-description="Create a new gift to get started." />}
+                  )) : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
                 </motion.div>
               ) : (
                 <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
@@ -568,7 +535,6 @@ description="Create a new gift to get started." />}
       </main>
       <BottomNav />
       
-      {/* Detail Modal */}
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
@@ -585,7 +551,6 @@ description="Create a new gift to get started." />}
         />
       )}
 
-      {/* Success Modal */}
       <AnimatePresence>
         {successModalData && (
           <SuccessModal 
@@ -601,8 +566,6 @@ description="Create a new gift to get started." />}
     </div>
   );
 }
-
-// --- Subcomponents ---
 
 function FilterChip({ isActive, onClick, label }: any) {
     return (
