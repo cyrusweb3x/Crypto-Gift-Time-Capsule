@@ -33,7 +33,7 @@ const ERC20_ABI = [
   "function symbol() view returns (string)"
 ];
 
-// Wallet Hook with Silent Connect
+// Wallet Hook Updated to Prevent Stale Provider Errors
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
@@ -87,21 +87,6 @@ function useEvmWallet() {
     setShowDisconnectAlert(false);
   }, []);
 
-  const ensureChain = useCallback(async () => {
-    if (!window.ethereum) return false;
-    try {
-      const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
-      if (currentChainId === CHAIN_ID_HEX) return true;
-      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_ID_HEX }] });
-      const _provider = new BrowserProvider(window.ethereum);
-      const _signer = await _provider.getSigner();
-      setProvider(_provider);
-      setSigner(_signer);
-      setChainId(CHAIN_ID_DECIMAL);
-      return true;
-    } catch (error) { console.error("Chain switch failed:", error); return false; }
-  }, []);
-
   useEffect(() => {
     if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
     if (window.ethereum) {
@@ -109,20 +94,18 @@ function useEvmWallet() {
             if (accs.length === 0) confirmDisconnect();
             else checkConnection();
         });
-        window.ethereum.on("chainChanged", () => window.location.reload());
+        // We removed window.reload() here to prevent abrupt interruptions that cause Network Errors
+        window.ethereum.on("chainChanged", () => setTimeout(checkConnection, 1000));
     }
   }, [checkConnection, confirmDisconnect]);
 
-  return { provider, signer, address, chainId, connect, disconnect: () => setShowDisconnectAlert(true), confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting, ensureChain };
+  return { provider, signer, address, chainId, connect, disconnect: () => setShowDisconnectAlert(true), confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting };
 }
 
 export default function CreatePage() {
-  const { provider, signer, address, chainId, connect, disconnect, confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting, ensureChain } = useEvmWallet();
+  const { provider, signer, address, chainId, connect, disconnect, confirmDisconnect, showDisconnectAlert, setShowDisconnectAlert, isConnecting } = useEvmWallet();
 
-  // Mode State
   const [isRedPacket, setIsRedPacket] = useState(false);
-
-  // Common State
   const [selectedToken, setSelectedToken] = useState<"ETH" | "USDC">("ETH");
   const [amount, setAmount] = useState("");
   const [unlockDate, setUnlockDate] = useState("");
@@ -137,62 +120,67 @@ export default function CreatePage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showConfetti, setShowConfetti] = useState(false);
 
-  // Single Gift State
   const [recipientInput, setRecipientInput] = useState("");
   const [resolvedAddress, setResolvedAddress] = useState("");
   const [isResolving, setIsResolving] = useState(false);
   const [showGiftModal, setShowGiftModal] = useState(false);
   const [successData, setSuccessData] = useState<any>(null);
 
-  // Red Packet State
   const [maxClaimers, setMaxClaimers] = useState("10");
   const [distributionType, setDistributionType] = useState<"EQUAL" | "LUCKY">("EQUAL");
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [generatedLink, setGeneratedLink] = useState("");
 
-  // Fetch Balances
-  const fetchBalances = useCallback(async () => {
-    if (!address || !provider) {
-        setBalances({ ETH: "0.0", USDC: "0.0" });
-        return;
-    }
+  const ensureMainnetChain = async () => {
+    if (!window.ethereum) return false;
     try {
-        const ethRaw = await provider.getBalance(address);
-        const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
+        const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+        if (currentChainId !== CHAIN_ID_HEX) {
+            await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_ID_HEX }] });
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Allow RPC to settle
+        }
+        return true;
+    } catch {
+        return false;
+    }
+  };
+
+  const fetchBalances = useCallback(async () => {
+    if (!address || !window.ethereum) return;
+    try {
+        const _provider = new BrowserProvider(window.ethereum);
+        const ethRaw = await _provider.getBalance(address);
+        const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, _provider);
         const usdcRaw = await usdcContract.balanceOf(address);
         const decimals = await usdcContract.decimals();
         setUsdcDecimals(Number(decimals));
         setBalances({ ETH: formatUnits(ethRaw, 18), USDC: formatUnits(usdcRaw, decimals) });
       } catch (e) { console.error("Balance fetch error:", e); }
-  }, [address, provider]);
+  }, [address]);
 
-  // Reduced polling to prevent RPC spam (Every 30 seconds instead of 10)
   useEffect(() => {
     fetchBalances();
-    const interval = setInterval(fetchBalances, 30000);
-    return () => clearInterval(interval);
-  }, [fetchBalances]);
+  }, [fetchBalances, chainId]);
 
-  // Fetch Allowance only ONCE when wallet/token changes
   useEffect(() => {
-    if (selectedToken === "USDC" && address && signer) {
+    if (selectedToken === "USDC" && address && window.ethereum) {
       const fetchAllowance = async () => {
         try {
-          const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
+          const _provider = new BrowserProvider(window.ethereum);
+          const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, _provider);
           const allowance = await usdcContract.allowance(address, CONTRACT_ADDRESS);
           setUsdcAllowance(allowance);
         } catch (e) { console.error("Allowance fetch error:", e); }
       };
       fetchAllowance();
     }
-  }, [selectedToken, address, signer]);
+  }, [selectedToken, address, chainId]);
 
-  // Check Approval locally
   useEffect(() => {
     if (selectedToken === "USDC") {
         let checkAmount = BigInt(0);
         let cleanAmt = amount || "0";
-        if (cleanAmt.startsWith(".")) cleanAmt = "0" + cleanAmt;
+        if (cleanAmt.charAt(0) === ".") cleanAmt = "0" + cleanAmt;
         
         try { checkAmount = parseUnits(cleanAmt, usdcDecimals); } catch {}
         
@@ -206,7 +194,6 @@ export default function CreatePage() {
     }
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
-  // Optimized ENS Resolution
   const handleRecipientChange = async (val: string) => {
     const safeVal = String(val || "");
     setRecipientInput(safeVal);
@@ -215,14 +202,13 @@ export default function CreatePage() {
     if (!safeVal) { setResolvedAddress(""); return; }
     if (ethers.isAddress(safeVal)) { setResolvedAddress(safeVal); return; }
     
-    // Only resolve if it contains a dot, fixing TS error with String()
-    if (safeVal.includes(".")) {
+    if (safeVal.indexOf(".") !== -1) {
         setIsResolving(true);
         try {
-          if (provider) {
-            const resolved = await provider.resolveName(safeVal);
-            if (resolved) { setResolvedAddress(resolved); } else { setResolvedAddress(""); }
-          }
+          // Utilizing a public Mainnet provider uniquely for ENS checks to avoid Base "Network Error"
+          const mainnetProvider = ethers.getDefaultProvider("mainnet");
+          const resolved = await mainnetProvider.resolveName(safeVal);
+          if (resolved) { setResolvedAddress(resolved); } else { setResolvedAddress(""); }
         } catch { setResolvedAddress(""); } finally { setIsResolving(false); }
     } else {
         setResolvedAddress("");
@@ -257,27 +243,34 @@ export default function CreatePage() {
 
   const handleSubmit = async () => {
     if (!validate()) return;
-    if (!signer || !provider) { connect(); return; }
-    const correctChain = await ensureChain();
-    if (!correctChain) { setErrors({ submit: "Wrong network. Switch to Base Mainnet." }); return; }
+    if (!window.ethereum) { connect(); return; }
 
     try {
       setLoadingStep("IDLE");
       setErrors({}); 
+
+      // 1. Force network check directly before proceeding to prevent Provider race condition
+      const checkValidChain = await ensureMainnetChain();
+      if (!checkValidChain) { setErrors({ submit: "Failed to switch to Base Mainnet." }); return; }
+
+      // 2. IMPORTANT FIX: Create a FRESH Provider & Signer right before the action 
+      // This completely eliminates stale "Network Error"
+      const activeProvider = new BrowserProvider(window.ethereum);
+      const activeSigner = await activeProvider.getSigner();
       
-      const ethBalRaw = await provider.getBalance(address);
+      const ethBalRaw = await activeProvider.getBalance(address);
       if (ethBalRaw === BigInt(0)) {
           setErrors({ submit: "You need some ETH on Base Mainnet to pay for Gas fees!" });
           return;
       }
 
-      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, signer);
-      const giftContract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
+      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, activeSigner);
+      const giftContract = new Contract(CONTRACT_ADDRESS, contractAbi, activeSigner);
       
       const decimals = selectedToken === "ETH" ? 18 : usdcDecimals;
       
       let cleanAmount = amount;
-      if (cleanAmount.startsWith(".")) cleanAmount = "0" + cleanAmount;
+      if (cleanAmount.charAt(0) === ".") cleanAmount = "0" + cleanAmount;
       const amountWei = parseUnits(cleanAmount, decimals);
       
       const unlockTimestamp = Math.floor(new Date(`${unlockDate}T${unlockTime}`).getTime() / 1000);
@@ -292,7 +285,6 @@ export default function CreatePage() {
             const txApprove = await usdcContract.approve(CONTRACT_ADDRESS, amountWei);
             await txApprove.wait(1);
             setUsdcAllowance(amountWei);
-            await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
 
@@ -323,22 +315,20 @@ export default function CreatePage() {
 
           for (const log of receipt.logs) {
               try {
-                  // Type cast to any to prevent TS never error
-                  const parsedLog = giftContract.interface.parseLog({
-                      topics: Array.from(log.topics || []),
-                      data: log.data
-                  }) as any;
+                  const giftInterface = giftContract.interface as any;
+                  const logDataAny = log as any;
+                  const passedTopics = logDataAny.topics ? Array.from(logDataAny.topics) : [];
+                  const parsedLog = giftInterface.parseLog({ topics: passedTopics, data: logDataAny.data });
                   
-                  // Strict String casting for TS safety
-                  if (parsedLog && parsedLog.name && String(parsedLog.name).includes("Created")) {
-                      newPacketId = parsedLog.args[0].toString();
+                  const logNameStr = String((parsedLog as any)?.name || "");
+                  if (logNameStr.indexOf("Created") !== -1) {
+                      newPacketId = (parsedLog as any).args[0].toString();
                       break;
                   }
               } catch (e) { }
           }
 
-          const finalId = newPacketId ? newPacketId : tx.hash.slice(0, 10);
-          
+          const finalId = newPacketId ? newPacketId : tx.hash.substring(0, 10);
           setGeneratedLink(`${window.location.origin}/packet/${finalId}`);
           setShowLinkModal(true);
       } else {
@@ -358,7 +348,6 @@ export default function CreatePage() {
           );
 
           await tx.wait();
-          
           setSuccessData({
              token: selectedToken, amount: amount, recipient: resolvedAddress, unlockDate: new Date(`${unlockDate}T${unlockTime}`),
              message: message, txHash: tx.hash, nftTokenId: "Minted", isAnonymous: isAnonymous
@@ -374,33 +363,28 @@ export default function CreatePage() {
       console.error("Tx Error details:", err);
       setLoadingStep("IDLE");
       
-      if (err.code === "ACTION_REJECTED") {
+      if (err?.code === "ACTION_REJECTED") {
           setErrors({ submit: "Transaction was rejected by user." });
           return;
       }
       
-      // Strict string conversion to prevent TS never errors
       let errorMsg: string = "Transaction failed.";
-      
-      if (err?.info?.error?.message) {
-          errorMsg = String(err.info.error.message);
-      } else if (err?.error?.message) {
-          errorMsg = String(err.error.message);
-      } else if (err?.shortMessage) {
-          errorMsg = String(err.shortMessage);
-      } else if (err?.reason) {
-          errorMsg = String(err.reason);
-      } else if (err?.message) {
-          errorMsg = String(err.message).length > 80 ? String(err.message).substring(0, 80) + "..." : String(err.message);
-      }
+      if (err?.info?.error?.message) { errorMsg = String(err.info.error.message); } 
+      else if (err?.error?.message) { errorMsg = String(err.error.message); } 
+      else if (err?.shortMessage) { errorMsg = String(err.shortMessage); } 
+      else if (err?.reason) { errorMsg = String(err.reason); } 
+      else if (err?.message) { errorMsg = String(err.message).length > 80 ? String(err.message).substring(0, 80) + "..." : String(err.message); }
 
-      const safeErrorMsg = String(errorMsg);
+      const safeErrorMsg = String(errorMsg).toLowerCase();
 
-      if (safeErrorMsg.includes("insufficient funds") || safeErrorMsg.includes("gas required exceeds allowance")) {
+      // Better Network error handling translation
+      if (safeErrorMsg.indexOf("network error") !== -1 || safeErrorMsg.indexOf("fetch payload") !== -1) {
+          errorMsg = "Network Error: Stable connection to Base RPC lost. Try again.";
+      } else if (safeErrorMsg.indexOf("insufficient funds") !== -1 || safeErrorMsg.indexOf("gas required exceeds allowance") !== -1) {
           errorMsg = "Not enough ETH to pay for transaction gas fees on Base.";
-      } else if (safeErrorMsg.includes("transfer amount exceeds balance")) {
+      } else if (safeErrorMsg.indexOf("transfer amount exceeds balance") !== -1) {
           errorMsg = "Your USDC balance is too low.";
-      } else if (safeErrorMsg.includes("require") || safeErrorMsg.includes("reverted")) {
+      } else if (safeErrorMsg.indexOf("require") !== -1 || safeErrorMsg.indexOf("reverted") !== -1) {
           errorMsg = "Contract Revert: " + safeErrorMsg;
       }
       
@@ -439,7 +423,7 @@ export default function CreatePage() {
         {chainId && chainId !== CHAIN_ID_DECIMAL && (
             <div className="mb-6 flex items-center gap-3 rounded-2xl bg-yellow-50 p-4 text-yellow-800 border border-yellow-200">
                 <AlertTriangle className="h-5 w-5" />
-                <span className="font-bold text-sm">Wrong Network. <button onClick={ensureChain} className="underline">Switch to Base</button></span>
+                <span className="font-bold text-sm">Wrong Network. <button onClick={ensureMainnetChain} className="underline">Switch to Base</button></span>
             </div>
         )}
 
@@ -481,7 +465,7 @@ export default function CreatePage() {
                     <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50 dark:bg-card"><Clipboard className="h-5 w-5 text-primary" /></button>
                 </div>
                 {isResolving && <p className="ml-2 text-xs font-medium text-muted-foreground">Resolving domain...</p>}
-                {resolvedAddress && resolvedAddress !== recipientInput && <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.slice(0,6)}...{resolvedAddress.slice(-4)}</p>}
+                {resolvedAddress && resolvedAddress !== recipientInput && <p className="ml-2 text-xs font-bold text-green-600">✓ {resolvedAddress.substring(0,6)}...{resolvedAddress.substring(resolvedAddress.length - 4)}</p>}
                 {errors.recipient && <p className="ml-2 text-xs font-bold text-red-500">{errors.recipient}</p>}
              </div>
           ) : (
