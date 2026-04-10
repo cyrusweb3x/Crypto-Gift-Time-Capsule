@@ -15,7 +15,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 import contractAbi from "@/contractAbi.json";
 
-const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
+const CONTRACT_ADDRESS = "0xC8367b5EEc810677581575594225D7409e3E68C4";
 const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; 
 const CHAIN_ID_HEX = "0x2105"; 
 const CHAIN_ID_DECIMAL = 8453;

@@ -14,7 +14,7 @@ import { sdk } from "@farcaster/miniapp-sdk";
 import contractAbi from "@/contractAbi.json";
 
 // Contract Configuration 
-const CONTRACT_ADDRESS = "0x96e6ad1Dd470A4934B544fF3A6c6dCB9e2DD43A3";
+const CONTRACT_ADDRESS = "0xC8367b5EEc810677581575594225D7409e3E68C4";
 const BASE_CHAIN_ID = "0x2105"; // 8453 in hex
 const BASE_CHAIN_ID_BIGINT = BigInt(8453);
 const PUBLIC_RPC = "https://mainnet.base.org"; 
