@@ -10,8 +10,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Base Capsule",
-  description:
-    "Send crypto gifts that unlock in the future. Time-locked gifting secured on Base.",
+  description: "Send crypto gifts that unlock in the future. Time-locked gifting secured on Base.",
   generator: "v0.app",
   other: {
     "base:app_id": "69ae9a67f6467f4d78d3041c",

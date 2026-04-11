@@ -7,15 +7,13 @@ export const DATA_SUFFIX = Attribution.toDataSuffix({
 });
 
 export function appendBuilderCode(encodedData: string): string {
- 
-  const suffix = DATA_SUFFIX.startsWith("0x")
+  const suffixHex = DATA_SUFFIX.startsWith("0x")
     ? DATA_SUFFIX.slice(2)
     : DATA_SUFFIX;
 
-  
-  const clean = encodedData.startsWith("0x")
+  const dataHex = encodedData.startsWith("0x")
     ? encodedData.slice(2)
     : encodedData;
 
-  return "0x" + clean + suffix;
+  return "0x" + dataHex + suffixHex;
 }

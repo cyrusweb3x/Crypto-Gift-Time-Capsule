@@ -13,7 +13,7 @@
   "static/chunks/45e2d_ethers_lib_esm_wallet_1b37d8b6._.js",
   "static/chunks/45e2d_ethers_lib_esm_a4fbebe9._.js",
   "static/chunks/f1bde__pnpm_38e5b170._.js",
-  "static/chunks/f1bde__pnpm_8c708aa9._.js",
+  "static/chunks/f1bde__pnpm_3adf3584._.js",
   "static/chunks/4f8ed_zod_v3_ea59beac._.js",
   "static/chunks/65989_@solana_web3_js_lib_index_browser_esm_c3180c86.js",
   "static/chunks/f1bde__pnpm_5b6941ba._.js"
