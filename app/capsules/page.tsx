@@ -163,12 +163,14 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // Safe batch fetcher - returns {id, data} to keep track of ID
+      // Safe batch fetcher
       const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
-        const results: {id: number, data: any}[] = []; // Fixed: Added explicit type
+        const results: {id: number, data: any}[] = [];
+        if (total <= 0) return results; // Safety check for 0 or negative
+        
         for (let i = total; i >= 1; i -= batchSize) {
-          const batch: Promise<any>[] = []; // Fixed: Added explicit type
-          const batchIds: number[] = []; // Fixed: Added explicit type
+          const batch: Promise<any>[] = [];
+          const batchIds: number[] = [];
           for (let j = 0; j < batchSize && (i - j) >= 1; j++) {
             const id = i - j;
             batchIds.push(id);
@@ -178,8 +180,8 @@ export default function CapsulesPage() {
             }));
           }
           const batchResults = await Promise.all(batch);
-          batchResults.forEach((data: any, idx: number) => { // Fixed: Added types
-            if (data) results.push({ id: batchIds[idx], data });
+          batchResults.forEach((data: any, idx: number) => {
+            if (data && data[0] !== ethers.ZeroAddress) results.push({ id: batchIds[idx], data });
           });
           if (i > batchSize) await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -194,18 +196,21 @@ export default function CapsulesPage() {
         if (totalGifts > 0) {
           const rawGifts = await fetchInBatches(totalGifts, (id) => contract.gifts(id));
 
-          rawGifts.forEach(({id, data: gift}) => {
+          rawGifts.forEach((item) => {
             try {
-              if (!gift) return;
-              const sender = gift.sender || gift[0];
-              if (sender === ethers.ZeroAddress) return;
+              if (!item || !item.data) return;
+              const {id, data} = item;
+              const gift = data;
               
-              const recipient = gift.recipient || gift[1];
-              const tokenAddr = gift.token || gift[2];
-              const amountRaw = gift.amount || gift[3];
-              const unlockTime = Number(gift.unlockTime || gift[4]);
-              const isWithdrawn = gift.isWithdrawn || gift[5] || false;
-              const rawMsg = gift.message || gift[6] || "";
+              const sender = gift[0];
+              const recipient = gift[1];
+              const tokenAddr = gift[2];
+              const amountRaw = gift[3];
+              const unlockTime = Number(gift[4]);
+              const isWithdrawn = gift[5];
+              const rawMsg = gift[6] || "";
+
+              if (!sender || sender === ethers.ZeroAddress) return;
 
               const isETH = tokenAddr === ethers.ZeroAddress;
               const tokenSymbol = isETH ? "ETH" : "USDC";
@@ -251,16 +256,19 @@ export default function CapsulesPage() {
         if (totalRPs > 0) {
           const rawRPs = await fetchInBatches(totalRPs, (id) => contract.redPackets(id));
 
-          rawRPs.forEach(({id, data: rp}) => {
+          rawRPs.forEach((item) => {
             try {
-              if (!rp) return;
-              const sender = rp.creator || rp[0] || ethers.ZeroAddress;
-              if (sender === ethers.ZeroAddress) return;
+              if (!item || !item.data) return;
+              const {id, data} = item;
+              const rp = data;
               
-              const tokenAddr = rp.token || rp[1] || ethers.ZeroAddress;
-              const totalAmountRaw = rp.totalAmount || rp[2] || 0;
-              const unlockTime = Number(rp.unlockTime || rp[3] || 0);
-              const rawMsg = rp.message || rp[4] || "";
+              const sender = rp[0];
+              if (!sender || sender === ethers.ZeroAddress) return;
+              
+              const tokenAddr = rp[1];
+              const totalAmountRaw = rp[2];
+              const unlockTime = Number(rp[3]);
+              const rawMsg = rp[4] || "";
 
               const isETH = tokenAddr === ethers.ZeroAddress;
               const tokenSymbol = isETH ? "ETH" : "USDC";
@@ -302,9 +310,13 @@ export default function CapsulesPage() {
       }
 
       const sortByIdDesc = (a: any, b: any) => {
-        const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
-        const numB = parseInt(b.id.toString().replace(/\D/g, '')) || 0;
-        return numB - numA;
+        try {
+          const numA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
+          const numB = parseInt(String(b.id).replace(/\D/g, '')) || 0;
+          return numB - numA;
+        } catch (e) {
+          return 0;
+        }
       };
 
       sent.sort(sortByIdDesc);
@@ -335,13 +347,15 @@ export default function CapsulesPage() {
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
     const setupTimers = (capsules: any[], setCapsules: any) => {
+      if (!capsules || !Array.isArray(capsules)) return;
       capsules.forEach((capsule) => {
-        if (!capsule.isUnlocked && !capsule.isWithdrawn && capsule.unlockDate) {
+        if (!capsule || !capsule.unlockDate) return;
+        if (!capsule.isUnlocked && !capsule.isWithdrawn) {
           const timeUntilUnlock = new Date(capsule.unlockDate).getTime() - Date.now();
           if (timeUntilUnlock > 0 && timeUntilUnlock < 86400000) {
             const timerId = setTimeout(() => {
               setCapsules((currentCapsules: any[]) =>
-                currentCapsules.map((c) => c.id === capsule.id ? { ...c, isUnlocked: true, message: c.realMessage || c.message } : c)
+                currentCapsules.map((c) => c && c.id === capsule.id ? { ...c, isUnlocked: true, message: c.realMessage || c.message } : c)
               );
             }, timeUntilUnlock + 1000); 
             timers.push(timerId);
@@ -357,7 +371,7 @@ export default function CapsulesPage() {
   const handleClaim = async () => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
     
-    let giftIdStr = selectedCapsule.id?.toString() || "";
+    let giftIdStr = String(selectedCapsule.id || "");
     if (giftIdStr.includes('gift-')) {
       giftIdStr = giftIdStr.replace('gift-', '');
     }
@@ -374,51 +388,55 @@ export default function CapsulesPage() {
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
       
+      // Verify
       try {
         const giftDetails = await contract.gifts(giftIdNum);
-        if (giftDetails.sender === ethers.ZeroAddress) {
+        if (!giftDetails || giftDetails[0] === ethers.ZeroAddress) {
           alert("This gift does not exist");
           setIsClaiming(false);
           return;
         }
-        if (giftDetails.isWithdrawn) {
+        if (giftDetails[5]) { // isWithdrawn
           alert("This gift was already claimed");
-          setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
+          setMyReceivedCapsules((prev) => prev.map((c) => c && c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
           setSelectedCapsule(null);
           setIsClaiming(false);
           return;
         }
       } catch (err) {
-        console.log("Pre-check failed, proceeding anyway");
+        console.log("Pre-check failed", err);
       }
       
       const tx = await contract.withdrawGift(BigInt(giftIdNum));
       setPendingTxHash(tx.hash);
-      console.log("Transaction sent:", tx.hash);
       
+      // Poll for receipt
       let receipt = null;
       const maxAttempts = 45;
+      const txProvider = signer.provider || provider;
       
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         
         try {
-          receipt = await signer.provider.getTransactionReceipt(tx.hash);
-          if (receipt) break;
+          if (txProvider) {
+            receipt = await txProvider.getTransactionReceipt(tx.hash);
+            if (receipt) break;
+          }
         } catch (e) {
-          // Continue polling
+          // Continue
         }
       }
       
       if (receipt && receipt.status === 1) {
-        setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
+        setMyReceivedCapsules((prev) => prev.map((c) => c && c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
         setSuccessModalData({ amount: selectedCapsule.amount, token: selectedCapsule.token });
         setSelectedCapsule(null);
         fetchCapsules(true);
       } else if (receipt && receipt.status === 0) {
         alert("Transaction failed on blockchain");
       } else {
-        alert("Transaction is taking longer than usual. Please check your wallet for status.");
+        alert("Transaction is processing. Check your wallet and refresh.");
         setSelectedCapsule(null);
       }
       
@@ -433,11 +451,9 @@ export default function CapsulesPage() {
         alert("Error: Gift is still locked");
       } else if (error?.message?.includes("AlreadyWithdrawn")) {
         alert("This gift was already claimed");
-        setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
+        setMyReceivedCapsules((prev) => prev.map((c) => c && c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
       } else if (error?.message?.includes("NotAuthorized")) {
         alert("You are not authorized to claim this gift");
-      } else if (error?.message?.includes("timeout") || error?.code === "TIMEOUT") {
-        alert("Network timeout. If the transaction was sent, please wait and refresh the page.");
       } else {
         alert("Claim failed: " + (error?.reason || error?.message || "Unknown error")); 
       }
@@ -456,8 +472,8 @@ export default function CapsulesPage() {
     } catch (err) {}
   };
 
-  const sentCapsules = mySentCapsules.filter(c => filter === "all" || c.token === filter);
-  const receivedCapsules = myReceivedCapsules.filter(c => filter === "all" || c.token === filter);
+  const sentCapsules = mySentCapsules.filter(c => c && (filter === "all" || c.token === filter));
+  const receivedCapsules = myReceivedCapsules.filter(c => c && (filter === "all" || c.token === filter));
 
   return (
     <div className="min-h-screen bg-background pb-20 relative font-sans text-foreground">
@@ -523,7 +539,7 @@ export default function CapsulesPage() {
                 <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {sentCapsules.length > 0 ? sentCapsules.map((c) => (
                     <CapsuleCard 
-                      key={c.id} 
+                      key={c.id || Math.random()} 
                       type="sent" 
                       recipient={c.isRedPacket ? c.recipient : shortenAddress(c.recipient)} 
                       amount={c.amount} 
@@ -540,7 +556,7 @@ export default function CapsulesPage() {
                 <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {receivedCapsules.length > 0 ? receivedCapsules.map((c) => (
                     <CapsuleCard 
-                      key={c.id} 
+                      key={c.id || Math.random()} 
                       type="received" 
                       sender={
                         c.isRedPacket 
