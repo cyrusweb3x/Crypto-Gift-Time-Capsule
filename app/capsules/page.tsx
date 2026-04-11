@@ -17,7 +17,7 @@ import contractAbi from "@/contractAbi.json";
 import { getName, getAvatar } from "@coinbase/onchainkit/identity";
 import { base } from "viem/chains";
 
-const CONTRACT_ADDRESS = "0xC8367b5EEc810677581575594225D7409e3E68C4";
+const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
 const BASE_CHAIN_ID = "0x2105"; // 8453
 const STORAGE_KEY = "yupp_wallet_connected";
 
@@ -339,7 +339,7 @@ export default function CapsulesPage() {
     setIsClaiming(true);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-      const tx = await contract.withdrawGift(selectedCapsule.id.replace('gift-', ''));
+      const tx = await contract.withdrawGift(BigInt(selectedCapsule.id.replace('gift-', '')));
       await tx.wait();
 
       const claimedAmount = selectedCapsule.amount;

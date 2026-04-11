@@ -20,7 +20,7 @@ declare global {
 }
 
 // Updated for Base Mainnet
-const CONTRACT_ADDRESS = "0xC8367b5EEc810677581575594225D7409e3E68C4";
+const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
 const BASE_CHAIN_ID = "0x2105"; // 8453
 const STORAGE_KEY = "yupp_wallet_connected";
 
@@ -117,11 +117,11 @@ export default function RedPacketClaimPage() {
       }
 
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, currentProvider);
-      const data = await contract.getRedPacketDetails(packetId);
+      const data = await contract.getRedPacketDetails(BigInt(packetId));
       setPacketData(data);
 
       if (address) {
-        const claimed = await contract.hasClaimedRedPacket(packetId, address);
+        const claimed = await contract.hasClaimedRedPacket(BigInt(packetId), address);
         setHasClaimed(claimed);
       }
     } catch (error) {
@@ -173,7 +173,7 @@ export default function RedPacketClaimPage() {
     setIsClaiming(true);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-      const tx = await contract.claimRedPacket(packetId);
+      const tx = await contract.claimRedPacket(BigInt(packetId));
       const receipt = await tx.wait(); 
       
       const tokenAddress = packetData?.[2];
