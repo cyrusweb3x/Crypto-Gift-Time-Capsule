@@ -64,6 +64,7 @@ export default function CapsulesPage() {
   const [isClaiming, setIsClaiming] = useState(false);
   const [successModalData, setSuccessModalData] = useState<{ amount: string, token: string } | null>(null);
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
+  const [pendingTxHash, setPendingTxHash] = useState<string | null>(null);
 
   const fetchBalances = async (acc: string, _provider: BrowserProvider) => {
     try {
@@ -164,11 +165,11 @@ export default function CapsulesPage() {
 
       // Safe batch fetcher - returns {id, data} to keep track of ID
       const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
-        const results = [];
-        for (let i = total; i > 0; i -= batchSize) { // Start from total, not total-1
-          const batch = [];
-          const batchIds = [];
-          for (let j = 0; j < batchSize && (i - j) > 0; j++) {
+        const results: {id: number, data: any}[] = []; // Fixed: Added explicit type
+        for (let i = total; i >= 1; i -= batchSize) {
+          const batch: Promise<any>[] = []; // Fixed: Added explicit type
+          const batchIds: number[] = []; // Fixed: Added explicit type
+          for (let j = 0; j < batchSize && (i - j) >= 1; j++) {
             const id = i - j;
             batchIds.push(id);
             batch.push(fetchFn(id).catch((err) => {
@@ -177,10 +178,10 @@ export default function CapsulesPage() {
             }));
           }
           const batchResults = await Promise.all(batch);
-          batchResults.forEach((data, idx) => {
+          batchResults.forEach((data: any, idx: number) => { // Fixed: Added types
             if (data) results.push({ id: batchIds[idx], data });
           });
-          await new Promise(resolve => setTimeout(resolve, 50));
+          if (i > batchSize) await new Promise(resolve => setTimeout(resolve, 100));
         }
         return results;
       };
@@ -188,101 +189,117 @@ export default function CapsulesPage() {
       // Fetch Gifts
       try {
         const totalGifts = Number(await contract.giftCounter());
-        const rawGifts = await fetchInBatches(totalGifts, (id) => contract.gifts(id));
+        console.log("Total gifts:", totalGifts);
+        
+        if (totalGifts > 0) {
+          const rawGifts = await fetchInBatches(totalGifts, (id) => contract.gifts(id));
 
-        rawGifts.forEach(({id, data: gift}) => {
-          try {
-            if (!gift) return;
-            const sender = gift.sender || gift[0];
-            const recipient = gift.recipient || gift[1];
-            const tokenAddr = gift.token || gift[2];
-            const amountRaw = gift.amount || gift[3];
-            const unlockTime = Number(gift.unlockTime || gift[4]);
-            const isWithdrawn = gift.isWithdrawn || gift[5] || false;
-            const rawMsg = gift.message || gift[6] || "";
+          rawGifts.forEach(({id, data: gift}) => {
+            try {
+              if (!gift) return;
+              const sender = gift.sender || gift[0];
+              if (sender === ethers.ZeroAddress) return;
+              
+              const recipient = gift.recipient || gift[1];
+              const tokenAddr = gift.token || gift[2];
+              const amountRaw = gift.amount || gift[3];
+              const unlockTime = Number(gift.unlockTime || gift[4]);
+              const isWithdrawn = gift.isWithdrawn || gift[5] || false;
+              const rawMsg = gift.message || gift[6] || "";
 
-            const isETH = tokenAddr === ethers.ZeroAddress;
-            const tokenSymbol = isETH ? "ETH" : "USDC";
-            const amountFormatted = isETH ? formatEther(amountRaw) : formatUnits(amountRaw, 6);
+              const isETH = tokenAddr === ethers.ZeroAddress;
+              const tokenSymbol = isETH ? "ETH" : "USDC";
+              const amountFormatted = isETH ? formatEther(amountRaw) : formatUnits(amountRaw, 6);
 
-            const { content, isAnonymous } = parseGiftMessage(rawMsg);
-            const isUnlocked = Date.now() >= unlockTime * 1000;
+              const { content, isAnonymous } = parseGiftMessage(rawMsg);
+              const isUnlocked = Date.now() >= unlockTime * 1000;
 
-            const recData = {
-              id: `gift-${id}`, // Use the ID we fetched with
-              sender,
-              recipient,
-              amount: amountFormatted,
-              token: tokenSymbol,
-              unlockDate: new Date(unlockTime * 1000).toISOString(),
-              isUnlocked,
-              isWithdrawn,
-              message: content,
-              realMessage: content,
-              isAnonymous,
-              isRedPacket: false,
-              txHash: ""
-            };
+              const recData = {
+                id: `gift-${id}`,
+                sender,
+                recipient,
+                amount: amountFormatted,
+                token: tokenSymbol,
+                unlockDate: new Date(unlockTime * 1000).toISOString(),
+                isUnlocked,
+                isWithdrawn,
+                message: content,
+                realMessage: content,
+                isAnonymous,
+                isRedPacket: false,
+                txHash: ""
+              };
 
-            if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
+              if (!isUnlocked) recData.message = "🔒 Message is hidden until unlocked";
 
-            if (sender.toLowerCase() === address.toLowerCase()) sent.push(recData);
-            if (recipient.toLowerCase() === address.toLowerCase()) received.push(recData);
-          } catch (err) {
-            console.error("Error parsing gift:", err);
-          }
-        });
-      } catch (err) { console.error("Error fetching giftCounter:", err); }
+              if (sender.toLowerCase() === address.toLowerCase()) sent.push(recData);
+              if (recipient.toLowerCase() === address.toLowerCase()) received.push(recData);
+            } catch (err) {
+              console.error("Error parsing gift:", err);
+            }
+          });
+        }
+      } catch (err) { 
+        console.error("Error fetching gifts:", err); 
+      }
 
       // Fetch Red Packets
       try {
         const totalRPs = Number(await contract.redPacketCounter());
-        const rawRPs = await fetchInBatches(totalRPs, (id) => contract.redPackets(id));
+        console.log("Total red packets:", totalRPs);
+        
+        if (totalRPs > 0) {
+          const rawRPs = await fetchInBatches(totalRPs, (id) => contract.redPackets(id));
 
-        rawRPs.forEach(({id, data: rp}) => {
-          try {
-            if (!rp) return;
-            const sender = rp.creator || rp[0] || ethers.ZeroAddress;
-            const tokenAddr = rp.token || rp[1] || ethers.ZeroAddress;
-            const totalAmountRaw = rp.totalAmount || rp[2] || 0;
-            const unlockTime = Number(rp.unlockTime || rp[3] || 0);
-            const rawMsg = rp.message || rp[4] || "";
+          rawRPs.forEach(({id, data: rp}) => {
+            try {
+              if (!rp) return;
+              const sender = rp.creator || rp[0] || ethers.ZeroAddress;
+              if (sender === ethers.ZeroAddress) return;
+              
+              const tokenAddr = rp.token || rp[1] || ethers.ZeroAddress;
+              const totalAmountRaw = rp.totalAmount || rp[2] || 0;
+              const unlockTime = Number(rp.unlockTime || rp[3] || 0);
+              const rawMsg = rp.message || rp[4] || "";
 
-            const isETH = tokenAddr === ethers.ZeroAddress;
-            const tokenSymbol = isETH ? "ETH" : "USDC";
-            const amountFormatted = isETH ? formatEther(totalAmountRaw) : formatUnits(totalAmountRaw, 6);
+              const isETH = tokenAddr === ethers.ZeroAddress;
+              const tokenSymbol = isETH ? "ETH" : "USDC";
+              const amountFormatted = isETH ? formatEther(totalAmountRaw) : formatUnits(totalAmountRaw, 6);
 
-            const { content, isAnonymous } = parseGiftMessage(rawMsg);
-            const isUnlocked = Date.now() >= unlockTime * 1000;
+              const { content, isAnonymous } = parseGiftMessage(rawMsg);
+              const isUnlocked = Date.now() >= unlockTime * 1000;
 
-            const rpData = {
-              id: `rp-${id}`, // Use the ID we fetched with
-              sender,
-              recipient: "Multiple",
-              amount: amountFormatted,
-              token: tokenSymbol,
-              unlockDate: new Date(unlockTime * 1000).toISOString(),
-              isUnlocked,
-              isWithdrawn: false,
-              message: content,
-              realMessage: content,
-              isAnonymous,
-              isRedPacket: true,
-              txHash: ""
-            };
+              const rpData = {
+                id: `rp-${id}`,
+                sender,
+                recipient: "Multiple",
+                amount: amountFormatted,
+                token: tokenSymbol,
+                unlockDate: new Date(unlockTime * 1000).toISOString(),
+                isUnlocked,
+                isWithdrawn: false,
+                message: content,
+                realMessage: content,
+                isAnonymous,
+                isRedPacket: true,
+                txHash: ""
+              };
 
-            if (!isUnlocked) rpData.message = "🔒 Message is hidden until unlocked";
+              if (!isUnlocked) rpData.message = "🔒 Message is hidden until unlocked";
 
-            if (sender.toLowerCase() === address.toLowerCase()) {
-              sent.push(rpData);
-            } else {
-              received.push(rpData);
+              if (sender.toLowerCase() === address.toLowerCase()) {
+                sent.push(rpData);
+              } else {
+                received.push(rpData);
+              }
+            } catch (err) {
+              console.error("Error parsing red packet:", err);
             }
-          } catch (err) {
-            console.error("Error parsing red packet:", err);
-          }
-        });
-      } catch (err) { console.error("Error fetching redPacketCounter:", err); }
+          });
+        }
+      } catch (err) { 
+        console.error("Error fetching red packets:", err); 
+      }
 
       const sortByIdDesc = (a: any, b: any) => {
         const numA = parseInt(a.id.toString().replace(/\D/g, '')) || 0;
@@ -310,7 +327,7 @@ export default function CapsulesPage() {
       fetchCapsules(); 
       const interval = setInterval(() => {
         fetchCapsules(true); 
-      }, 10000);
+      }, 30000);
       return () => clearInterval(interval);
     }
   }, [provider, address, fetchCapsules]);
@@ -340,9 +357,8 @@ export default function CapsulesPage() {
   const handleClaim = async () => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
     
-    // Extract gift ID properly
-    let giftIdStr = selectedCapsule.id;
-    if (typeof giftIdStr === 'string' && giftIdStr.includes('gift-')) {
+    let giftIdStr = selectedCapsule.id?.toString() || "";
+    if (giftIdStr.includes('gift-')) {
       giftIdStr = giftIdStr.replace('gift-', '');
     }
     
@@ -353,55 +369,81 @@ export default function CapsulesPage() {
     }
     
     setIsClaiming(true);
+    setPendingTxHash(null);
+    
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
       
-      // Verify gift exists before claiming
       try {
         const giftDetails = await contract.gifts(giftIdNum);
         if (giftDetails.sender === ethers.ZeroAddress) {
           alert("This gift does not exist");
+          setIsClaiming(false);
           return;
         }
         if (giftDetails.isWithdrawn) {
           alert("This gift was already claimed");
-          return;
-        }
-        if (Math.floor(Date.now() / 1000) < Number(giftDetails.unlockTime)) {
-          alert("This gift is still locked");
+          setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
+          setSelectedCapsule(null);
+          setIsClaiming(false);
           return;
         }
       } catch (err) {
-        console.error("Verification error:", err);
+        console.log("Pre-check failed, proceeding anyway");
       }
       
       const tx = await contract.withdrawGift(BigInt(giftIdNum));
-      await tx.wait(1, 60000);
-
-      const claimedAmount = selectedCapsule.amount;
-      const claimedToken = selectedCapsule.token;
-
-      setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
-      setSelectedCapsule(null); 
-      setSuccessModalData({ amount: claimedAmount, token: claimedToken });
-
-      fetchCapsules(true);
+      setPendingTxHash(tx.hash);
+      console.log("Transaction sent:", tx.hash);
+      
+      let receipt = null;
+      const maxAttempts = 45;
+      
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        try {
+          receipt = await signer.provider.getTransactionReceipt(tx.hash);
+          if (receipt) break;
+        } catch (e) {
+          // Continue polling
+        }
+      }
+      
+      if (receipt && receipt.status === 1) {
+        setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
+        setSuccessModalData({ amount: selectedCapsule.amount, token: selectedCapsule.token });
+        setSelectedCapsule(null);
+        fetchCapsules(true);
+      } else if (receipt && receipt.status === 0) {
+        alert("Transaction failed on blockchain");
+      } else {
+        alert("Transaction is taking longer than usual. Please check your wallet for status.");
+        setSelectedCapsule(null);
+      }
+      
     } catch (error: any) { 
       console.error("Claim error:", error);
       
-      if (error?.message?.includes("GiftDoesNotExist") || error?.data === "0x0ce10b5f") {
+      if (error?.code === "ACTION_REJECTED") {
+        alert("Transaction was rejected");
+      } else if (error?.message?.includes("GiftDoesNotExist") || error?.data === "0x0ce10b5f") {
         alert("Error: Gift not found");
       } else if (error?.message?.includes("StillLocked")) {
-        alert("Error: Gift is locked");
+        alert("Error: Gift is still locked");
       } else if (error?.message?.includes("AlreadyWithdrawn")) {
-        alert("Error: Already claimed");
+        alert("This gift was already claimed");
+        setMyReceivedCapsules((prev) => prev.map((c) => c.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
       } else if (error?.message?.includes("NotAuthorized")) {
-        alert("Error: Not authorized");
+        alert("You are not authorized to claim this gift");
+      } else if (error?.message?.includes("timeout") || error?.code === "TIMEOUT") {
+        alert("Network timeout. If the transaction was sent, please wait and refresh the page.");
       } else {
         alert("Claim failed: " + (error?.reason || error?.message || "Unknown error")); 
       }
     } finally { 
-      setIsClaiming(false); 
+      setIsClaiming(false);
+      setPendingTxHash(null);
     }
   };
 
@@ -527,7 +569,12 @@ export default function CapsulesPage() {
       {selectedCapsule && (
         <GiftModal 
           isOpen={!!selectedCapsule} 
-          onClose={() => !isClaiming && setSelectedCapsule(null)} 
+          onClose={() => {
+            if (!isClaiming) {
+              setSelectedCapsule(null);
+              setPendingTxHash(null);
+            }
+          }} 
           type="detail" 
           gift={{ 
             ...selectedCapsule, 
@@ -535,7 +582,7 @@ export default function CapsulesPage() {
               ? `🧧 Red Packet from ${selectedCapsule.isAnonymous ? "Secret" : shortenAddress(selectedCapsule.sender || "")}`
               : (selectedCapsule.isAnonymous ? "Anonymous" : shortenAddress(selectedCapsule.sender || ""))
           }} 
-          onClaim={(selectedCapsule.isUnlocked && !selectedCapsule.isWithdrawn && activeTab === 'received' && !selectedCapsule.isRedPacket) ? handleClaim : undefined} 
+          onClaim={handleClaim}
           isClaiming={isClaiming}
         />
       )}
