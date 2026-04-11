@@ -25,6 +25,7 @@ const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
 const parseGiftMessage = (rawMsg: string) => {
+  if (!rawMsg || typeof rawMsg !== 'string') return { content: "", isAnonymous: false };
   try {
     const decoded = atob(rawMsg);
     const json = JSON.parse(decoded);
@@ -35,8 +36,9 @@ const parseGiftMessage = (rawMsg: string) => {
 };
 
 const shortenAddress = (addr: string) => {
-  if (!addr || addr.length < 10) return addr;
+  if (!addr || typeof addr !== 'string') return "Unknown";
   if (!addr.startsWith("0x")) return addr; 
+  if (addr.length < 10) return addr;
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 };
 
@@ -336,11 +338,21 @@ export default function CapsulesPage() {
 
   const handleClaim = async () => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
+    
+    // Safety check for ID
+    const giftIdStr = selectedCapsule.id?.toString().replace('gift-', '');
+    if (!giftIdStr) {
+      alert("Invalid gift ID");
+      return;
+    }
+    
     setIsClaiming(true);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-      const tx = await contract.withdrawGift(BigInt(selectedCapsule.id.replace('gift-', '')));
-      await tx.wait();
+      const tx = await contract.withdrawGift(BigInt(giftIdStr));
+      
+      // 60 second timeout to avoid "timeout of 5000ms exceeded" error
+      await tx.wait(1, 60000);
 
       const claimedAmount = selectedCapsule.amount;
       const claimedToken = selectedCapsule.token;
@@ -351,7 +363,14 @@ export default function CapsulesPage() {
 
       fetchCapsules(true);
     } catch (error: any) { 
-        alert("Claim failed: " + (error.reason || error.message)); 
+        console.error("Claim error:", error);
+        
+        // Better error messages
+        if (error?.code === "TIMEOUT" || error?.message?.includes("timeout")) {
+          alert("Transaction is taking longer than expected. Please wait a minute and refresh the page to see if it was successful.");
+        } else {
+          alert("Claim failed: " + (error?.reason || error?.message || "Unknown error")); 
+        }
     } finally { 
         setIsClaiming(false); 
     }
