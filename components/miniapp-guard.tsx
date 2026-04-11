@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { sdk } from "@farcaster/miniapp-sdk";
 import QRCode from "react-qr-code";
 
-const MINIAPP_URL = "https://base.app/miniapp/basecapsule.space";
+const MINIAPP_URL = "https://base.app/app/basecapsule.space/";
 
 export function MiniAppGuard({ children }: { children: React.ReactNode }) {
   const [isAllowed, setIsAllowed] = useState<boolean | null>(null);
@@ -45,7 +45,7 @@ export function MiniAppGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Base App এর বাইরে হলে block করুন
+ 
   if (!isAllowed) {
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center p-8 text-center">
