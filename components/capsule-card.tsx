@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Lock, Unlock, ArrowRight, CheckCircle2, Users } from "lucide-react";
+import { Lock, Unlock, ArrowRight, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface CapsuleCardProps {
   type: "sent" | "received";
   sender?: string;
@@ -19,13 +20,9 @@ interface CapsuleCardProps {
   txHash?: string;
   onClaim?: () => void;
   onClick?: () => void;
-  isRedPacket?: boolean;
-  maxClaimers?: number;
-  claimedCount?: number;
-  remainingClaimers?: number;
-  remainingAmount?: string;
 }
 
+// ─── Helper ───────────────────────────────────────────────────────────────────
 const toSafeDate = (unlockDate: Date | string | number): Date => {
   try {
     if (unlockDate instanceof Date && !isNaN(unlockDate.getTime()))
@@ -38,10 +35,13 @@ const toSafeDate = (unlockDate: Date | string | number): Date => {
       const d = new Date(unlockDate);
       if (!isNaN(d.getTime())) return d;
     }
-  } catch {}
+  } catch {
+    // ignore
+  }
   return new Date(Date.now() + 86_400_000);
 };
 
+// ─── Component ────────────────────────────────────────────────────────────────
 export function CapsuleCard({
   type,
   sender,
@@ -55,15 +55,11 @@ export function CapsuleCard({
   txHash,
   onClaim,
   onClick,
-  isRedPacket = false,
-  maxClaimers,
-  claimedCount,
-  remainingClaimers,
-  remainingAmount,
 }: CapsuleCardProps) {
   const [timeLeft, setTimeLeft] = useState("");
   const safeDateObj = toSafeDate(unlockDate);
 
+  // ── Countdown Timer ──────────────────────────────────────────────────────
   useEffect(() => {
     if (isWithdrawn || isUnlocked) return;
 
@@ -92,19 +88,16 @@ export function CapsuleCard({
     return () => clearInterval(interval);
   }, [safeDateObj, isWithdrawn, isUnlocked]);
 
+  // ── Derived Values ───────────────────────────────────────────────────────
   const displayDate = (() => {
-    try {
-      return safeDateObj.toLocaleDateString();
-    } catch {
-      return "--";
-    }
+    try { return safeDateObj.toLocaleDateString(); }
+    catch { return "--"; }
   })();
 
-  const claimProgress =
-    maxClaimers && maxClaimers > 0
-      ? Math.round(((claimedCount ?? 0) / maxClaimers) * 100)
-      : 0;
+  const hasMessage = typeof message === "string" && message.trim() !== "";
+  const hasTxHash  = typeof txHash  === "string" && txHash.trim()  !== "";
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <motion.div
       whileHover={{ scale: 1.01 }}
@@ -112,25 +105,14 @@ export function CapsuleCard({
       onClick={onClick}
       className="group relative cursor-pointer overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm transition-all hover:border-primary/50"
     >
-      {/* Red Packet Badge */}
-      {isRedPacket && (
-        <div className="absolute top-0 right-0 bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded-bl-xl rounded-tr-2xl">
-          🧧 RED PACKET
-        </div>
-      )}
-
-      {/* Top Row */}
+      {/* ── Top Row: Address & Status ──────────────────────────────────── */}
       <div className="mb-3 flex items-start justify-between">
         <div className="flex flex-col overflow-hidden">
           <span className="text-[10px] uppercase text-muted-foreground">
             {type === "sent" ? "To:" : "From:"}
           </span>
           <span className="truncate text-sm font-semibold text-foreground max-w-[180px]">
-            {type === "sent"
-              ? isRedPacket
-                ? "Multiple Recipients"
-                : recipient
-              : sender}
+            {type === "sent" ? recipient : sender}
           </span>
         </div>
 
@@ -146,23 +128,16 @@ export function CapsuleCard({
           )}
         >
           {isWithdrawn ? (
-            <>
-              {isRedPacket ? "Cancelled" : "Claimed"}
-              <CheckCircle2 className="h-3 w-3" />
-            </>
+            <>Claimed <CheckCircle2 className="h-3 w-3" /></>
           ) : isUnlocked ? (
-            <>
-              Unlocked <Unlock className="h-3 w-3" />
-            </>
+            <>Unlocked <Unlock className="h-3 w-3" /></>
           ) : (
-            <>
-              Locked <Lock className="h-3 w-3" />
-            </>
+            <>Locked <Lock className="h-3 w-3" /></>
           )}
         </div>
       </div>
 
-      {/* Amount Row */}
+      {/* ── Amount Row ────────────────────────────────────────────────── */}
       <div className="mb-3 flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
           {token === "ETH" ? (
@@ -182,17 +157,11 @@ export function CapsuleCard({
               {token}
             </span>
           </h4>
-          {/* Remaining amount — Red Packet only */}
-          {isRedPacket && remainingAmount && !isWithdrawn && (
-            <p className="text-xs text-muted-foreground">
-              {remainingAmount} {token} remaining
-            </p>
-          )}
         </div>
       </div>
 
-      {/* ✅ Message — সবসময় দেখাবে যদি থাকে */}
-      {message && message.trim() !== "" && (
+      {/* ── Message ───────────────────────────────────────────────────── */}
+      {hasMessage && (
         <div className="mb-3 rounded-xl bg-secondary/60 px-3 py-2">
           <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
             {message}
@@ -200,41 +169,8 @@ export function CapsuleCard({
         </div>
       )}
 
-      {/* Red Packet Progress */}
-      {isRedPacket &&
-        maxClaimers !== undefined &&
-        claimedCount !== undefined && (
-          <div className="mb-3 rounded-xl bg-secondary/50 p-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-xs font-bold text-muted-foreground">
-                  Claims
-                </span>
-              </div>
-              <span className="text-xs font-black text-foreground">
-                {claimedCount} / {maxClaimers}
-              </span>
-            </div>
-            <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
-              <div
-                className="h-full rounded-full bg-blue-500 transition-all duration-500"
-                style={{ width: `${claimProgress}%` }}
-              />
-            </div>
-            <div className="flex justify-between mt-1.5">
-              <span className="text-[10px] text-muted-foreground">
-                {claimProgress}% claimed
-              </span>
-              <span className="text-[10px] text-muted-foreground">
-                {remainingClaimers ?? maxClaimers - claimedCount} spots left
-              </span>
-            </div>
-          </div>
-        )}
-
-      {/* ✅ TxHash — থাকলে দেখাবে */}
-      {txHash && txHash.trim() !== "" && (
+      {/* ── TxHash Link ───────────────────────────────────────────────── */}
+      {hasTxHash && (
         <div className="mb-3">
           <a
             href={`https://basescan.org/tx/${txHash}`}
@@ -248,7 +184,7 @@ export function CapsuleCard({
         </div>
       )}
 
-      {/* Bottom Row */}
+      {/* ── Bottom Row: Date & Claim ───────────────────────────────────── */}
       <div className="flex items-center justify-between border-t border-border pt-3">
         <div className="flex flex-col">
           <span className="text-[10px] text-muted-foreground">
@@ -279,7 +215,7 @@ export function CapsuleCard({
             }}
             className="h-8 bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 rounded-full font-bold shadow-md hover:shadow-lg transition-all"
           >
-            {isRedPacket ? "Claim 🧧" : "Claim"}
+            Claim
           </Button>
         ) : (
           <ArrowRight className="h-4 w-4 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" />
