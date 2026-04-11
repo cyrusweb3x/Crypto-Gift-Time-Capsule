@@ -1,7 +1,7 @@
 // app/capsules/error.tsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export default function Error({
   error,
@@ -10,45 +10,134 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const [details, setDetails] = useState({
+    name: "",
+    message: "",
+    stack: "",
+    digest: "",
+  });
+
   useEffect(() => {
-    console.error("CAPSULES PAGE ERROR:", error);
+    console.error("FULL ERROR OBJECT:", error);
+    console.error("ERROR NAME:", error?.name);
+    console.error("ERROR MESSAGE:", error?.message);
+    console.error("ERROR STACK:", error?.stack);
+
+    setDetails({
+      name: error?.name || "undefined",
+      message: error?.message || "undefined",
+      stack: error?.stack || "undefined",
+      digest: error?.digest || "undefined",
+    });
   }, [error]);
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-lg bg-red-50 border border-red-200 rounded-2xl p-6">
-        <h2 className="text-xl font-bold text-red-700 mb-4">
-          ⚠️ Error Details (Debug Mode)
-        </h2>
-        
-        <div className="mb-4">
-          <p className="text-sm font-bold text-red-600 mb-1">Error Name:</p>
-          <p className="text-sm bg-white border border-red-200 rounded p-2 font-mono break-all">
-            {error?.name || "Unknown"}
-          </p>
-        </div>
+    <div style={{ 
+      minHeight: "100vh", 
+      background: "#fff", 
+      padding: "20px",
+      fontFamily: "monospace"
+    }}>
+      <h1 style={{ color: "red", fontSize: "20px", marginBottom: "20px" }}>
+        DEBUG ERROR PAGE
+      </h1>
 
-        <div className="mb-4">
-          <p className="text-sm font-bold text-red-600 mb-1">Error Message:</p>
-          <p className="text-sm bg-white border border-red-200 rounded p-2 font-mono break-all whitespace-pre-wrap">
-            {error?.message || "No message"}
-          </p>
+      <div style={{ 
+        background: "#fee2e2", 
+        border: "1px solid red", 
+        borderRadius: "8px", 
+        padding: "16px",
+        marginBottom: "12px"
+      }}>
+        <strong>Error Name:</strong>
+        <div style={{ 
+          background: "white", 
+          padding: "8px", 
+          marginTop: "4px",
+          wordBreak: "break-all",
+          minHeight: "30px"
+        }}>
+          {details.name}
         </div>
-
-        <div className="mb-6">
-          <p className="text-sm font-bold text-red-600 mb-1">Stack Trace:</p>
-          <pre className="text-xs bg-white border border-red-200 rounded p-2 font-mono break-all whitespace-pre-wrap overflow-auto max-h-64">
-            {error?.stack || "No stack trace"}
-          </pre>
-        </div>
-
-        <button
-          onClick={reset}
-          className="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700"
-        >
-          Try Again
-        </button>
       </div>
+
+      <div style={{ 
+        background: "#fee2e2", 
+        border: "1px solid red", 
+        borderRadius: "8px", 
+        padding: "16px",
+        marginBottom: "12px"
+      }}>
+        <strong>Error Message:</strong>
+        <div style={{ 
+          background: "white", 
+          padding: "8px", 
+          marginTop: "4px",
+          wordBreak: "break-all",
+          minHeight: "30px"
+        }}>
+          {details.message}
+        </div>
+      </div>
+
+      <div style={{ 
+        background: "#fee2e2", 
+        border: "1px solid red", 
+        borderRadius: "8px", 
+        padding: "16px",
+        marginBottom: "12px"
+      }}>
+        <strong>Digest:</strong>
+        <div style={{ 
+          background: "white", 
+          padding: "8px", 
+          marginTop: "4px",
+          wordBreak: "break-all",
+          minHeight: "30px"
+        }}>
+          {details.digest}
+        </div>
+      </div>
+
+      <div style={{ 
+        background: "#fee2e2", 
+        border: "1px solid red", 
+        borderRadius: "8px", 
+        padding: "16px",
+        marginBottom: "20px"
+      }}>
+        <strong>Stack Trace:</strong>
+        <pre style={{ 
+          background: "white", 
+          padding: "8px", 
+          marginTop: "4px",
+          wordBreak: "break-all",
+          whiteSpace: "pre-wrap",
+          fontSize: "11px",
+          maxHeight: "300px",
+          overflow: "auto",
+          minHeight: "50px"
+        }}>
+          {details.stack}
+        </pre>
+      </div>
+
+      <button
+        onClick={reset}
+        style={{
+          width: "100%",
+          background: "red",
+          color: "white",
+          padding: "12px",
+          border: "none",
+          borderRadius: "8px",
+          fontSize: "16px",
+          fontWeight: "bold",
+          cursor: "pointer"
+        }}
+      >
+        Try Again
+      </button>
     </div>
   );
 }
