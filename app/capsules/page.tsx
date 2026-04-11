@@ -13,70 +13,46 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  ethers, BrowserProvider, Contract, formatUnits, formatEther
+  ethers, BrowserProvider, Contract, formatUnits, formatEther, JsonRpcProvider
 } from "ethers";
 import contractAbi from "@/contractAbi.json";
-import { appendBuilderCode } from "@/lib/builderCode"; // ← Builder Code import
+import { appendBuilderCode } from "@/lib/builderCode";
 
 const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
 const BASE_CHAIN_ID = "0x2105";
 const STORAGE_KEY = "yupp_wallet_connected";
 const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const PUBLIC_RPC = "https://mainnet.base.org";
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
-
 const ZERO_BIG = BigInt(0);
 
 const safeParseMessage = (rawMsg: any) => {
   try {
-    if (!rawMsg || typeof rawMsg !== "string" || !rawMsg.trim()) {
-      return { content: "", isAnonymous: false };
-    }
+    if (!rawMsg || typeof rawMsg !== "string" || !rawMsg.trim()) return { content: "", isAnonymous: false };
     try {
       const decoded = atob(rawMsg.trim());
       try {
         const json = JSON.parse(decoded);
-        return {
-          content: String(json?.content ?? ""),
-          isAnonymous: Boolean(json?.isAnonymous),
-        };
-      } catch {
-        return { content: decoded, isAnonymous: false };
-      }
-    } catch {
-      return { content: rawMsg.trim(), isAnonymous: false };
-    }
-  } catch {
-    return { content: "", isAnonymous: false };
-  }
+        return { content: String(json?.content ?? ""), isAnonymous: Boolean(json?.isAnonymous) };
+      } catch { return { content: decoded, isAnonymous: false }; }
+    } catch { return { content: rawMsg.trim(), isAnonymous: false }; }
+  } catch { return { content: "", isAnonymous: false }; }
 };
 
 const safeFormatEther = (val: any): string => {
-  try {
-    if (val === null || val === undefined) return "0";
-    return formatEther(val);
-  } catch {
-    try { return String(Number(val) / 1e18); }
-    catch { return "0"; }
-  }
+  try { if (val === null || val === undefined) return "0"; return formatEther(val); }
+  catch { try { return String(Number(val) / 1e18); } catch { return "0"; } }
 };
 
 const safeFormatUnits = (val: any, dec: number): string => {
-  try {
-    if (val === null || val === undefined) return "0";
-    return formatUnits(val, dec);
-  } catch {
-    try { return String(Number(val) / Math.pow(10, dec)); }
-    catch { return "0"; }
-  }
+  try { if (val === null || val === undefined) return "0"; return formatUnits(val, dec); }
+  catch { try { return String(Number(val) / Math.pow(10, dec)); } catch { return "0"; } }
 };
 
 const isZero = (addr: any): boolean => {
   try {
     if (!addr || typeof addr !== "string") return true;
-    return (
-      addr === ethers.ZeroAddress ||
-      addr === "0x0000000000000000000000000000000000000000"
-    );
+    return addr === ethers.ZeroAddress || addr === "0x0000000000000000000000000000000000000000";
   } catch { return true; }
 };
 
@@ -94,8 +70,25 @@ const safeUnlockDate = (unlockTime: number): Date => {
     const d = new Date(ms);
     if (isNaN(d.getTime())) return new Date(Date.now() + 86400000);
     return d;
+  } catch { return new Date(Date.now() + 86400000); }
+};
+
+const nameCache = new Map<string, string>();
+
+const resolveBasename = async (address: string): Promise<string> => {
+  if (!address) return "Unknown";
+  if (nameCache.has(address)) return nameCache.get(address)!;
+  try {
+    const { getName } = await import("@coinbase/onchainkit/identity");
+    const { base } = await import("viem/chains");
+    const name = await getName({ address: address as `0x${string}`, chain: base });
+    const result = name || short(address);
+    nameCache.set(address, result);
+    return result;
   } catch {
-    return new Date(Date.now() + 86400000);
+    const result = short(address);
+    nameCache.set(address, result);
+    return result;
   }
 };
 
@@ -128,7 +121,6 @@ const parseGift = (id: number, g: any, myAddress: string) => {
     const isETH  = isZero(tokenAddr);
     const token  = isETH ? "ETH" : "USDC";
     const amount = isETH ? safeFormatEther(amountRaw) : safeFormatUnits(amountRaw, 6);
-
     const { content } = safeParseMessage(rawMsg);
     const unlockDateObj = safeUnlockDate(unlockTime);
     const isUnlocked    = Date.now() >= unlockDateObj.getTime();
@@ -146,6 +138,8 @@ const parseGift = (id: number, g: any, myAddress: string) => {
       txHash: "",
       isMine:  sender.toLowerCase() === me,
       isForMe: recipient.toLowerCase() === me,
+      senderName: short(sender),
+      recipientName: short(recipient),
     };
   } catch (err) {
     console.error(`parseGift #${id} failed:`, err);
@@ -155,19 +149,23 @@ const parseGift = (id: number, g: any, myAddress: string) => {
 
 const parseRedPacket = (id: number, rp: any, myAddress: string) => {
   try {
-    const creator     = String(rp[1] ?? "");
-    const tokenAddr   = String(rp[2] ?? "");
-    const totalAmt    = rp[3] ?? ZERO_BIG;
-    const unlockTime  = Number(rp[7] ?? 0);
-    const isAnon      = Boolean(rp[9]);
-    const isCancelled = Boolean(rp[10]);
-    const rawMsg      = String(rp[11] ?? "");
+    const creator           = String(rp[1] ?? "");
+    const tokenAddr         = String(rp[2] ?? "");
+    const totalAmt          = rp[3] ?? ZERO_BIG;
+    const remainingAmt      = rp[4] ?? ZERO_BIG;
+    const maxClaimers       = Number(rp[5] ?? 0);
+    const remainingClaimers = Number(rp[6] ?? 0);
+    const unlockTime        = Number(rp[7] ?? 0);
+    const isAnon            = Boolean(rp[9]);
+    const isCancelled       = Boolean(rp[10]);
+    const rawMsg            = String(rp[11] ?? "");
 
     if (isZero(creator)) return null;
 
     const isETH  = isZero(tokenAddr);
     const token  = isETH ? "ETH" : "USDC";
     const amount = isETH ? safeFormatEther(totalAmt) : safeFormatUnits(totalAmt, 6);
+    const claimedCount = maxClaimers - remainingClaimers;
 
     const { content } = safeParseMessage(rawMsg);
     const unlockDateObj = safeUnlockDate(unlockTime);
@@ -188,8 +186,14 @@ const parseRedPacket = (id: number, rp: any, myAddress: string) => {
       isRedPacket: true,
       isCancelled,
       txHash: "",
+      maxClaimers,
+      remainingClaimers,
+      claimedCount,
+      remainingAmount: isETH ? safeFormatEther(remainingAmt) : safeFormatUnits(remainingAmt, 6),
       isMine:  creator.toLowerCase() === me,
       isForMe: creator.toLowerCase() !== me,
+      senderName: short(creator),
+      recipientName: "Multiple",
     };
   } catch (err) {
     console.error(`parseRedPacket #${id} failed:`, err);
@@ -239,10 +243,7 @@ export default function CapsulesPage() {
       const net = await _p.getNetwork();
       if (Number(net.chainId) !== 8453) {
         try {
-          await window.ethereum.request({
-            method: "wallet_switchEthereumChain",
-            params: [{ chainId: BASE_CHAIN_ID }],
-          });
+          await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: BASE_CHAIN_ID }] });
         } catch (e) { console.error("Chain switch:", e); }
       }
       setProvider(_p);
@@ -253,6 +254,7 @@ export default function CapsulesPage() {
       await fetchBalances(acc, _p);
       const { name, avatar: avt } = await safeGetIdentity(acc);
       if (name) setBasename(name);
+      else setBasename(short(acc));
       if (avt) setAvatar(avt);
     } catch (e) { console.error("setupWallet:", e); }
   };
@@ -294,66 +296,171 @@ export default function CapsulesPage() {
     }
   }, [mounted, checkConnection, confirmDisconnect]);
 
+  const resolveNames = useCallback(async (capsules: any[], setter: (v: any[]) => void) => {
+    const updated = await Promise.all(
+      capsules.map(async (c) => {
+        if (!c) return c;
+        const senderName = c.isAnonymous ? "Anonymous" : await resolveBasename(c.sender);
+        const recipientName = c.recipient && c.recipient !== "Multiple"
+          ? await resolveBasename(c.recipient)
+          : "Multiple";
+        return { ...c, senderName, recipientName };
+      })
+    );
+    setter(updated);
+  }, []);
+
   const fetchCapsules = useCallback(async (isSilent = false) => {
-    if (!provider || !address) return;
+    if (!address) return;
     if (!isSilent) setIsLoadingData(true);
     else setIsBackgroundLoading(true);
     setFetchError(null);
 
     try {
-      const contract = new Contract(CONTRACT_ADDRESS, contractAbi, provider);
+      const readProvider = new JsonRpcProvider(PUBLIC_RPC);
+      const contract = new Contract(CONTRACT_ADDRESS, contractAbi, readProvider);
+
       const sent: any[] = [];
       const received: any[] = [];
 
+      // Sent Gifts
       try {
         const totalGifts = Number(await contract.giftCounter());
         if (totalGifts > 0) {
-          const batchSize = 5;
-          for (let i = totalGifts; i >= 1; i -= batchSize) {
-            const batch: Promise<any>[] = [];
-            const ids: number[] = [];
-            for (let j = 0; j < batchSize && i - j >= 1; j++) {
-              const gid = i - j;
-              ids.push(gid);
-              batch.push(contract.gifts(gid).catch((e: any) => { console.warn(`gifts(${gid}) failed:`, e); return null; }));
+          const sentIds: number[] = [];
+          for (let i = 0; i < totalGifts; i++) {
+            try {
+              const giftId = await contract.userSentGifts(address, i);
+              if (giftId && Number(giftId) > 0) sentIds.push(Number(giftId));
+            } catch { break; }
+          }
+          if (sentIds.length === 0) {
+            const batchSize = 5;
+            for (let i = totalGifts; i >= 1; i -= batchSize) {
+              const batch: Promise<any>[] = [];
+              const ids: number[] = [];
+              for (let j = 0; j < batchSize && i - j >= 1; j++) {
+                const gid = i - j; ids.push(gid);
+                batch.push(contract.gifts(gid).catch(() => null));
+              }
+              const results = await Promise.all(batch);
+              results.forEach((g, idx) => {
+                if (!g) return;
+                const parsed = parseGift(ids[idx], g, address);
+                if (parsed?.isMine) sent.push(parsed);
+              });
+              if (i > batchSize) await new Promise(r => setTimeout(r, 80));
             }
-            const results = await Promise.all(batch);
+          } else {
+            const results = await Promise.all(sentIds.map(id => contract.gifts(id).catch(() => null)));
             results.forEach((g, idx) => {
               if (!g) return;
-              const parsed = parseGift(ids[idx], g, address);
-              if (!parsed) return;
-              if (parsed.isMine)  sent.push(parsed);
-              if (parsed.isForMe) received.push(parsed);
+              const parsed = parseGift(sentIds[idx], g, address);
+              if (parsed) sent.push(parsed);
             });
-            if (i > batchSize) await new Promise(r => setTimeout(r, 80));
           }
         }
-      } catch (err) { console.error("gifts fetch error:", err); }
+      } catch (err) { console.error("sent gifts error:", err); }
 
+      // Received Gifts
+      try {
+        const totalGifts = Number(await contract.giftCounter());
+        if (totalGifts > 0) {
+          const receivedIds: number[] = [];
+          for (let i = 0; i < totalGifts; i++) {
+            try {
+              const giftId = await contract.userReceivedGifts(address, i);
+              if (giftId && Number(giftId) > 0) receivedIds.push(Number(giftId));
+            } catch { break; }
+          }
+          if (receivedIds.length === 0) {
+            const batchSize = 5;
+            for (let i = totalGifts; i >= 1; i -= batchSize) {
+              const batch: Promise<any>[] = [];
+              const ids: number[] = [];
+              for (let j = 0; j < batchSize && i - j >= 1; j++) {
+                const gid = i - j; ids.push(gid);
+                batch.push(contract.gifts(gid).catch(() => null));
+              }
+              const results = await Promise.all(batch);
+              results.forEach((g, idx) => {
+                if (!g) return;
+                const parsed = parseGift(ids[idx], g, address);
+                if (parsed?.isForMe) received.push(parsed);
+              });
+              if (i > batchSize) await new Promise(r => setTimeout(r, 80));
+            }
+          } else {
+            const results = await Promise.all(receivedIds.map(id => contract.gifts(id).catch(() => null)));
+            results.forEach((g, idx) => {
+              if (!g) return;
+              const parsed = parseGift(receivedIds[idx], g, address);
+              if (parsed) received.push(parsed);
+            });
+          }
+        }
+      } catch (err) { console.error("received gifts error:", err); }
+
+      // Created Red Packets
       try {
         const totalRPs = Number(await contract.redPacketCounter());
         if (totalRPs > 0) {
-          const batchSize = 5;
-          for (let i = totalRPs; i >= 1; i -= batchSize) {
-            const batch: Promise<any>[] = [];
-            const ids: number[] = [];
-            for (let j = 0; j < batchSize && i - j >= 1; j++) {
-              const rid = i - j;
-              ids.push(rid);
-              batch.push(contract.redPackets(rid).catch((e: any) => { console.warn(`redPackets(${rid}) failed:`, e); return null; }));
+          const createdIds: number[] = [];
+          for (let i = 0; i < totalRPs; i++) {
+            try {
+              const rpId = await contract.userCreatedRedPackets(address, i);
+              if (rpId && Number(rpId) > 0) createdIds.push(Number(rpId));
+            } catch { break; }
+          }
+          if (createdIds.length === 0) {
+            const batchSize = 5;
+            for (let i = totalRPs; i >= 1; i -= batchSize) {
+              const batch: Promise<any>[] = [];
+              const ids: number[] = [];
+              for (let j = 0; j < batchSize && i - j >= 1; j++) {
+                const rid = i - j; ids.push(rid);
+                batch.push(contract.redPackets(rid).catch(() => null));
+              }
+              const results = await Promise.all(batch);
+              results.forEach((rp, idx) => {
+                if (!rp) return;
+                const parsed = parseRedPacket(ids[idx], rp, address);
+                if (parsed?.isMine) sent.push(parsed);
+              });
+              if (i > batchSize) await new Promise(r => setTimeout(r, 80));
             }
-            const results = await Promise.all(batch);
+          } else {
+            const results = await Promise.all(createdIds.map(id => contract.redPackets(id).catch(() => null)));
             results.forEach((rp, idx) => {
               if (!rp) return;
-              const parsed = parseRedPacket(ids[idx], rp, address);
-              if (!parsed) return;
-              if (parsed.isMine)  sent.push(parsed);
-              if (parsed.isForMe) received.push(parsed);
+              const parsed = parseRedPacket(createdIds[idx], rp, address);
+              if (parsed) sent.push(parsed);
             });
-            if (i > batchSize) await new Promise(r => setTimeout(r, 80));
           }
         }
-      } catch (err) { console.error("redPackets fetch error:", err); }
+      } catch (err) { console.error("created red packets error:", err); }
+
+      // Claimed Red Packets
+      try {
+        const totalRPs = Number(await contract.redPacketCounter());
+        if (totalRPs > 0) {
+          const claimedIds: number[] = [];
+          for (let i = 0; i < totalRPs; i++) {
+            try {
+              const rpId = await contract.userClaimedRedPackets(address, i);
+              if (rpId && Number(rpId) > 0) claimedIds.push(Number(rpId));
+            } catch { break; }
+          }
+          if (claimedIds.length > 0) {
+            const results = await Promise.all(claimedIds.map(id => contract.redPackets(id).catch(() => null)));
+            results.forEach((rp, idx) => {
+              if (!rp) return;
+              const parsed = parseRedPacket(claimedIds[idx], rp, address);
+              if (parsed) received.push(parsed);
+            });
+          }
+        }
+      } catch (err) { console.error("claimed red packets error:", err); }
 
       const byIdDesc = (a: any, b: any) => {
         const na = parseInt(String(a.id).replace(/\D/g, "")) || 0;
@@ -361,9 +468,16 @@ export default function CapsulesPage() {
         return nb - na;
       };
 
-      setMySentCapsules(sent.sort(byIdDesc));
-      setMyReceivedCapsules(received.sort(byIdDesc));
-      fetchBalances(address, provider);
+      const sortedSent     = sent.sort(byIdDesc);
+      const sortedReceived = received.sort(byIdDesc);
+
+      setMySentCapsules(sortedSent);
+      setMyReceivedCapsules(sortedReceived);
+
+      resolveNames(sortedSent, setMySentCapsules);
+      resolveNames(sortedReceived, setMyReceivedCapsules);
+
+      if (provider) fetchBalances(address, provider);
 
     } catch (err: any) {
       console.error("fetchCapsules:", err);
@@ -372,15 +486,15 @@ export default function CapsulesPage() {
       setIsLoadingData(false);
       setIsBackgroundLoading(false);
     }
-  }, [provider, address]);
+  }, [address, provider, resolveNames]);
 
   useEffect(() => {
-    if (provider && address) {
+    if (address) {
       fetchCapsules();
       const iv = setInterval(() => fetchCapsules(true), 30000);
       return () => clearInterval(iv);
     }
-  }, [provider, address, fetchCapsules]);
+  }, [address, fetchCapsules]);
 
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
@@ -393,9 +507,7 @@ export default function CapsulesPage() {
           const ms = unlockMs - Date.now();
           if (ms > 0 && ms < 86400000) {
             timers.push(setTimeout(() => {
-              set((prev: any[]) =>
-                prev.map(x => x?.id === c.id ? { ...x, isUnlocked: true, message: x.realMessage || "" } : x)
-              );
+              set((prev: any[]) => prev.map(x => x?.id === c.id ? { ...x, isUnlocked: true, message: x.realMessage || "" } : x));
             }, ms + 1000));
           }
         } catch { }
@@ -407,7 +519,54 @@ export default function CapsulesPage() {
   }, [myReceivedCapsules, mySentCapsules]);
 
   const handleClaim = async () => {
-    if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
+    if (!selectedCapsule || !signer) return;
+
+    if (selectedCapsule.isRedPacket) {
+      const rpIdNum = parseInt(String(selectedCapsule.id).replace("rp-", ""));
+      if (isNaN(rpIdNum) || rpIdNum <= 0) { alert("Invalid Red Packet ID"); return; }
+
+      setIsClaiming(true); setPendingTxHash(null);
+      try {
+        const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
+        const claimEncodedData = contract.interface.encodeFunctionData("claimRedPacket", [BigInt(rpIdNum)]);
+        const claimDataWithCode = appendBuilderCode(claimEncodedData);
+        const tx = await signer.sendTransaction({ to: CONTRACT_ADDRESS, data: claimDataWithCode });
+        setPendingTxHash(tx.hash);
+
+        let receipt = null;
+        const txp = signer.provider || provider;
+        for (let i = 0; i < 45; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+          try { if (txp) { receipt = await txp.getTransactionReceipt(tx.hash); if (receipt) break; } } catch { }
+        }
+
+        if (receipt && receipt.status === 1) {
+          try {
+            const readProvider = new JsonRpcProvider(PUBLIC_RPC);
+            const readContract = new Contract(CONTRACT_ADDRESS, contractAbi, readProvider);
+            const updatedRp = await readContract.redPackets(rpIdNum);
+            const parsed = parseRedPacket(rpIdNum, updatedRp, address);
+            if (parsed) {
+              setMyReceivedCapsules(p => p.map(c => c?.id === selectedCapsule.id ? { ...c, ...parsed, isWithdrawn: true } : c));
+            }
+          } catch { }
+          setSuccessModalData({ amount: selectedCapsule.amount, token: selectedCapsule.token });
+          setSelectedCapsule(null);
+          fetchCapsules(true);
+        } else if (receipt && receipt.status === 0) {
+          alert("Transaction failed on chain");
+        } else {
+          alert("Still processing — check wallet and refresh.");
+          setSelectedCapsule(null);
+        }
+      } catch (err: any) {
+        console.error("rp claim:", err);
+        if (err?.code === "ACTION_REJECTED") alert("Rejected");
+        else alert("Claim failed: " + (err?.reason || err?.message || "Unknown"));
+      } finally { setIsClaiming(false); setPendingTxHash(null); }
+      return;
+    }
+
     const giftIdNum = parseInt(String(selectedCapsule.id).replace("gift-", ""));
     if (isNaN(giftIdNum) || giftIdNum <= 0) { alert("Invalid gift ID"); return; }
 
@@ -424,35 +583,24 @@ export default function CapsulesPage() {
         }
       } catch { }
 
-      // ── Claim with Builder Code ──────────────────────────────
-      const claimEncodedData = contract.interface.encodeFunctionData(
-        "withdrawGift",
-        [BigInt(giftIdNum)]
-      );
+      const claimEncodedData = contract.interface.encodeFunctionData("withdrawGift", [BigInt(giftIdNum)]);
       const claimDataWithCode = appendBuilderCode(claimEncodedData);
-
-      const tx = await signer.sendTransaction({
-        to: CONTRACT_ADDRESS,
-        data: claimDataWithCode,
-      });
-
+      const tx = await signer.sendTransaction({ to: CONTRACT_ADDRESS, data: claimDataWithCode });
       setPendingTxHash(tx.hash);
 
       let receipt = null;
       const txp = signer.provider || provider;
       for (let i = 0; i < 45; i++) {
         await new Promise(r => setTimeout(r, 2000));
-        try {
-          if (txp) { receipt = await txp.getTransactionReceipt(tx.hash); if (receipt) break; }
-        } catch { }
+        try { if (txp) { receipt = await txp.getTransactionReceipt(tx.hash); if (receipt) break; } } catch { }
       }
 
-      if (receipt?.status === 1) {
+      if (receipt && receipt.status === 1) {
         setMyReceivedCapsules(p => p.map(c => c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
         setSuccessModalData({ amount: selectedCapsule.amount, token: selectedCapsule.token });
         setSelectedCapsule(null);
         fetchCapsules(true);
-      } else if (receipt?.status === 0) {
+      } else if (receipt && receipt.status === 0) {
         alert("Transaction failed on chain");
       } else {
         alert("Still processing — check wallet and refresh.");
@@ -472,11 +620,7 @@ export default function CapsulesPage() {
 
   const handleCopy = async () => {
     if (!address) return;
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch { }
+    try { await navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { }
   };
 
   if (!mounted) {
@@ -510,7 +654,7 @@ export default function CapsulesPage() {
                     )}
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold">{basename || "Base User"}</h3>
+                  <h3 className="text-lg font-bold">{basename || short(address)}</h3>
                   <button onClick={handleCopy} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
                     {short(address)}
                     {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
@@ -570,11 +714,21 @@ export default function CapsulesPage() {
                   {sentList.length > 0
                     ? sentList.map(c => (
                       <CapsuleCard
-                        key={c.id} type="sent"
-                        recipient={c.isRedPacket ? "Multiple Recipients" : short(c.recipient)}
-                        amount={c.amount} token={c.token} unlockDate={c.unlockDate}
-                        isUnlocked={c.isUnlocked} message={c.message} txHash={c.txHash}
+                        key={c.id}
+                        type="sent"
+                        recipient={c.isRedPacket ? "Multiple Recipients" : (c.recipientName || short(c.recipient))}
+                        amount={c.amount}
+                        token={c.token}
+                        unlockDate={c.unlockDate}
+                        isUnlocked={c.isUnlocked}
+                        message={c.message}
+                        txHash={c.txHash}
                         isWithdrawn={c.isWithdrawn}
+                        isRedPacket={c.isRedPacket}
+                        maxClaimers={c.maxClaimers}
+                        claimedCount={c.claimedCount}
+                        remainingClaimers={c.remainingClaimers}
+                        remainingAmount={c.remainingAmount}
                       />
                     ))
                     : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />
@@ -585,17 +739,26 @@ export default function CapsulesPage() {
                   {receivedList.length > 0
                     ? receivedList.map(c => (
                       <CapsuleCard
-                        key={c.id} type="received"
+                        key={c.id}
+                        type="received"
                         sender={
                           c.isRedPacket
-                            ? `🧧 Red Packet from ${c.isAnonymous ? "Secret" : short(c.sender)}`
-                            : c.isAnonymous ? "Secret Sender" : short(c.sender)
+                            ? `🧧 Red Packet from ${c.isAnonymous ? "Secret" : (c.senderName || short(c.sender))}`
+                            : c.isAnonymous ? "Secret Sender" : (c.senderName || short(c.sender))
                         }
-                        amount={c.amount} token={c.token} unlockDate={c.unlockDate}
-                        isUnlocked={c.isUnlocked} isWithdrawn={c.isWithdrawn}
-                        message={c.message} txHash={c.txHash}
-                        onClaim={c.isUnlocked && !c.isWithdrawn && !c.isRedPacket ? () => setSelectedCapsule(c) : undefined}
+                        amount={c.amount}
+                        token={c.token}
+                        unlockDate={c.unlockDate}
+                        isUnlocked={c.isUnlocked}
+                        isWithdrawn={c.isWithdrawn}
+                        message={c.message}
+                        txHash={c.txHash}
+                        onClaim={c.isUnlocked && !c.isWithdrawn ? () => setSelectedCapsule(c) : undefined}
                         onClick={() => setSelectedCapsule(c)}
+                        isRedPacket={c.isRedPacket}
+                        maxClaimers={c.maxClaimers}
+                        claimedCount={c.claimedCount}
+                        remainingClaimers={c.remainingClaimers}
                       />
                     ))
                     : <EmptyState icon={<Inbox />} title="Inbox Empty" description="Share your address to receive gifts." />
@@ -616,8 +779,8 @@ export default function CapsulesPage() {
           gift={{
             ...selectedCapsule,
             sender: selectedCapsule.isRedPacket
-              ? `🧧 Red Packet from ${selectedCapsule.isAnonymous ? "Secret" : short(selectedCapsule.sender)}`
-              : selectedCapsule.isAnonymous ? "Anonymous" : short(selectedCapsule.sender),
+              ? `🧧 Red Packet from ${selectedCapsule.isAnonymous ? "Secret" : (selectedCapsule.senderName || short(selectedCapsule.sender))}`
+              : selectedCapsule.isAnonymous ? "Anonymous" : (selectedCapsule.senderName || short(selectedCapsule.sender)),
           }}
           onClaim={handleClaim}
           isClaiming={isClaiming}
