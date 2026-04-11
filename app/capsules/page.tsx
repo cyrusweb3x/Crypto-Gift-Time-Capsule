@@ -26,6 +26,8 @@ const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
+const ZERO_BIG = BigInt(0);
+
 const safeParseMessage = (rawMsg: any) => {
   try {
     if (!rawMsg || typeof rawMsg !== "string" || !rawMsg.trim()) {
@@ -50,17 +52,27 @@ const safeParseMessage = (rawMsg: any) => {
   }
 };
 
-const safeFormatEther = (val: any) => {
-  try { return formatEther(val ?? 0n); }
-  catch { return "0"; }
+const safeFormatEther = (val: any): string => {
+  try {
+    if (val === null || val === undefined) return "0";
+    return formatEther(val);
+  } catch {
+    try { return String(Number(val) / 1e18); }
+    catch { return "0"; }
+  }
 };
 
-const safeFormatUnits = (val: any, dec: number) => {
-  try { return formatUnits(val ?? 0n, dec); }
-  catch { return "0"; }
+const safeFormatUnits = (val: any, dec: number): string => {
+  try {
+    if (val === null || val === undefined) return "0";
+    return formatUnits(val, dec);
+  } catch {
+    try { return String(Number(val) / Math.pow(10, dec)); }
+    catch { return "0"; }
+  }
 };
 
-const isZero = (addr: any) => {
+const isZero = (addr: any): boolean => {
   try {
     if (!addr || typeof addr !== "string") return true;
     return (
@@ -70,7 +82,7 @@ const isZero = (addr: any) => {
   } catch { return true; }
 };
 
-const short = (addr: any) => {
+const short = (addr: any): string => {
   try {
     if (!addr || typeof addr !== "string") return "Unknown";
     if (!addr.startsWith("0x")) return String(addr);
@@ -91,7 +103,7 @@ const safeGetIdentity = async (address: string) => {
   return { name: null, avatar: null };
 };
 
-// ─── Gift Parser (ABI-correct) ────────────────────────────────────
+// ─── Gift Parser ──────────────────────────────────────────────────
 // gifts() → [0]sender [1]recipient [2]token [3]amount [4]unlockTime
 //            [5]isWithdrawn [6]message [7]isAnonymous [8]assetType [9]tokenId
 
@@ -100,22 +112,20 @@ const parseGift = (id: number, g: any, myAddress: string) => {
     const sender      = String(g[0] ?? "");
     const recipient   = String(g[1] ?? "");
     const tokenAddr   = String(g[2] ?? "");
-    const amountRaw   = g[3] ?? 0n;
+    const amountRaw   = g[3] ?? ZERO_BIG;
     const unlockTime  = Number(g[4] ?? 0);
     const isWithdrawn = Boolean(g[5]);
     const rawMsg      = String(g[6] ?? "");
     const isAnon      = Boolean(g[7]);
-    // g[8] = assetType (enum), g[9] = tokenId — not needed for display
 
     if (isZero(sender)) return null;
 
-    const isETH = isZero(tokenAddr);
-    const token = isETH ? "ETH" : "USDC";
+    const isETH  = isZero(tokenAddr);
+    const token  = isETH ? "ETH" : "USDC";
     const amount = isETH
       ? safeFormatEther(amountRaw)
       : safeFormatUnits(amountRaw, 6);
 
-    // message field থেকে isAnonymous নাও (contract এ আলাদা field আছে)
     const { content } = safeParseMessage(rawMsg);
     const isUnlocked  = Date.now() >= unlockTime * 1000;
 
@@ -148,7 +158,7 @@ const parseGift = (id: number, g: any, myAddress: string) => {
   }
 };
 
-// ─── Red Packet Parser (ABI-correct) ─────────────────────────────
+// ─── Red Packet Parser ────────────────────────────────────────────
 // redPackets() → [0]id [1]creator [2]token [3]totalAmount
 //                [4]remainingAmount [5]maxClaimers [6]remainingClaimers
 //                [7]unlockTime [8]isLucky [9]isAnonymous [10]isCancelled
@@ -156,16 +166,13 @@ const parseGift = (id: number, g: any, myAddress: string) => {
 
 const parseRedPacket = (id: number, rp: any, myAddress: string) => {
   try {
-    // [0] is the stored id (uint256), [1] is creator
-    const creator      = String(rp[1] ?? "");
-    const tokenAddr    = String(rp[2] ?? "");
-    const totalAmt     = rp[3] ?? 0n;
-    // [4] remainingAmount, [5] maxClaimers, [6] remainingClaimers
-    const unlockTime   = Number(rp[7] ?? 0);
-    // [8] isLucky
-    const isAnon       = Boolean(rp[9]);
-    const isCancelled  = Boolean(rp[10]);
-    const rawMsg       = String(rp[11] ?? "");
+    const creator     = String(rp[1] ?? "");
+    const tokenAddr   = String(rp[2] ?? "");
+    const totalAmt    = rp[3] ?? ZERO_BIG;
+    const unlockTime  = Number(rp[7] ?? 0);
+    const isAnon      = Boolean(rp[9]);
+    const isCancelled = Boolean(rp[10]);
+    const rawMsg      = String(rp[11] ?? "");
 
     if (isZero(creator)) return null;
 
@@ -307,7 +314,6 @@ export default function CapsulesPage() {
     }
   }, [mounted, checkConnection, confirmDisconnect]);
 
-  // ── fetchCapsules using userSentGifts / userReceivedGifts arrays ──
   const fetchCapsules = useCallback(async (isSilent = false) => {
     if (!provider || !address) return;
     if (!isSilent) setIsLoadingData(true);
@@ -325,7 +331,6 @@ export default function CapsulesPage() {
         console.log("giftCounter:", totalGifts);
 
         if (totalGifts > 0) {
-          // Fetch all in batches, filter by address
           const batchSize = 5;
           for (let i = totalGifts; i >= 1; i -= batchSize) {
             const batch: Promise<any>[] = [];
@@ -423,7 +428,6 @@ export default function CapsulesPage() {
     }
   }, [provider, address, fetchCapsules]);
 
-  // Auto-unlock timer
   useEffect(() => {
     const timers: NodeJS.Timeout[] = [];
     const setup = (caps: any[], set: any) => {
@@ -458,11 +462,10 @@ export default function CapsulesPage() {
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
 
-      // Pre-check
       try {
         const g = await contract.gifts(giftIdNum);
         if (!g || isZero(g[0])) { alert("Gift does not exist"); setIsClaiming(false); return; }
-        if (g[5]) { // isWithdrawn
+        if (g[5]) {
           alert("Already claimed");
           setMyReceivedCapsules(p => p.map(c => c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c));
           setSelectedCapsule(null); setIsClaiming(false); return;
@@ -506,8 +509,11 @@ export default function CapsulesPage() {
 
   const handleCopy = async () => {
     if (!address) return;
-    try { await navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 2000); }
-    catch { /* ignore */ }
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* ignore */ }
   };
 
   if (!mounted) {
@@ -523,7 +529,12 @@ export default function CapsulesPage() {
 
   return (
     <div className="min-h-screen bg-background pb-20 relative font-sans text-foreground">
-      <Header isConnected={isConnected} address={address} onConnect={handleConnect} onDisconnect={() => setShowDisconnectAlert(true)} />
+      <Header
+        isConnected={isConnected}
+        address={address}
+        onConnect={handleConnect}
+        onDisconnect={() => setShowDisconnectAlert(true)}
+      />
       <main className="mx-auto max-w-[480px] px-6 py-8">
         {!isConnected ? (
           <NotConnectedState onConnect={handleConnect} />
@@ -535,13 +546,22 @@ export default function CapsulesPage() {
                 <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm">
                   {avatar
                     ? <img src={avatar} alt="avatar" className="h-full w-full object-cover" />
-                    : <div className="flex h-full w-full items-center justify-center bg-blue-100"><User className="h-6 w-6 text-primary" /></div>}
+                    : (
+                      <div className="flex h-full w-full items-center justify-center bg-blue-100">
+                        <User className="h-6 w-6 text-primary" />
+                      </div>
+                    )}
                 </div>
                 <div>
                   <h3 className="text-lg font-bold">{basename || "Base User"}</h3>
-                  <button onClick={handleCopy} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors"
+                  >
                     {short(address)}
-                    {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+                    {copied
+                      ? <Check className="h-3 w-3 text-green-600" />
+                      : <Copy className="h-3 w-3" />}
                   </button>
                 </div>
               </div>
@@ -563,14 +583,29 @@ export default function CapsulesPage() {
               <div className="mb-4 rounded-2xl bg-red-50 border border-red-200 p-4 flex items-center gap-3">
                 <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
                 <p className="text-sm text-red-600 font-medium flex-1">{fetchError}</p>
-                <Button variant="ghost" size="sm" onClick={() => fetchCapsules(false)} className="text-red-600">Retry</Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => fetchCapsules(false)}
+                  className="text-red-600"
+                >
+                  Retry
+                </Button>
               </div>
             )}
 
             {/* Tabs */}
             <div className="mb-6 flex rounded-full bg-secondary p-1">
-              <TabButton isActive={activeTab === "received"} onClick={() => setActiveTab("received")} label="Received" />
-              <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
+              <TabButton
+                isActive={activeTab === "received"}
+                onClick={() => setActiveTab("received")}
+                label="Received"
+              />
+              <TabButton
+                isActive={activeTab === "sent"}
+                onClick={() => setActiveTab("sent")}
+                label="Sent"
+              />
             </div>
 
             {/* Filters */}
@@ -584,9 +619,17 @@ export default function CapsulesPage() {
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-lg flex items-center gap-2">
                 {activeTab === "sent" ? "Sent Gifts" : "Inbox"}
-                {isBackgroundLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                {isBackgroundLoading && (
+                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                )}
               </h3>
-              <Button variant="ghost" size="icon" onClick={() => fetchCapsules(false)} disabled={isLoadingData} className="rounded-full hover:bg-secondary">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => fetchCapsules(false)}
+                disabled={isLoadingData}
+                className="rounded-full hover:bg-secondary"
+              >
                 <RefreshCw className={cn("h-4 w-4", isLoadingData && "animate-spin")} />
               </Button>
             </div>
@@ -599,33 +642,66 @@ export default function CapsulesPage() {
                   <p>Loading on-chain data…</p>
                 </div>
               ) : activeTab === "sent" ? (
-                <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                <motion.div
+                  key="sent"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-4"
+                >
                   {sentList.length > 0
                     ? sentList.map(c => (
-                        <CapsuleCard key={c.id} type="sent"
+                        <CapsuleCard
+                          key={c.id}
+                          type="sent"
                           recipient={c.isRedPacket ? "Multiple Recipients" : short(c.recipient)}
-                          amount={c.amount} token={c.token} unlockDate={c.unlockDate}
-                          isUnlocked={c.isUnlocked} message={c.message} txHash={c.txHash} isWithdrawn={c.isWithdrawn} />
+                          amount={c.amount}
+                          token={c.token}
+                          unlockDate={c.unlockDate}
+                          isUnlocked={c.isUnlocked}
+                          message={c.message}
+                          txHash={c.txHash}
+                          isWithdrawn={c.isWithdrawn}
+                        />
                       ))
-                    : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />}
+                    : <EmptyState icon={<Gift />} title="No gifts sent" description="Create a new gift to get started." />
+                  }
                 </motion.div>
               ) : (
-                <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                <motion.div
+                  key="received"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-4"
+                >
                   {receivedList.length > 0
                     ? receivedList.map(c => (
-                        <CapsuleCard key={c.id} type="received"
+                        <CapsuleCard
+                          key={c.id}
+                          type="received"
                           sender={
                             c.isRedPacket
                               ? `🧧 Red Packet from ${c.isAnonymous ? "Secret" : short(c.sender)}`
                               : c.isAnonymous ? "Secret Sender" : short(c.sender)
                           }
-                          amount={c.amount} token={c.token} unlockDate={c.unlockDate}
-                          isUnlocked={c.isUnlocked} isWithdrawn={c.isWithdrawn}
-                          message={c.message} txHash={c.txHash}
-                          onClaim={c.isUnlocked && !c.isWithdrawn && !c.isRedPacket ? () => setSelectedCapsule(c) : undefined}
-                          onClick={() => setSelectedCapsule(c)} />
+                          amount={c.amount}
+                          token={c.token}
+                          unlockDate={c.unlockDate}
+                          isUnlocked={c.isUnlocked}
+                          isWithdrawn={c.isWithdrawn}
+                          message={c.message}
+                          txHash={c.txHash}
+                          onClaim={
+                            c.isUnlocked && !c.isWithdrawn && !c.isRedPacket
+                              ? () => setSelectedCapsule(c)
+                              : undefined
+                          }
+                          onClick={() => setSelectedCapsule(c)}
+                        />
                       ))
-                    : <EmptyState icon={<Inbox />} title="Inbox Empty" description="Share your address to receive gifts." />}
+                    : <EmptyState icon={<Inbox />} title="Inbox Empty" description="Share your address to receive gifts." />
+                  }
                 </motion.div>
               )}
             </AnimatePresence>
@@ -637,7 +713,12 @@ export default function CapsulesPage() {
       {selectedCapsule && (
         <GiftModal
           isOpen={!!selectedCapsule}
-          onClose={() => { if (!isClaiming) { setSelectedCapsule(null); setPendingTxHash(null); } }}
+          onClose={() => {
+            if (!isClaiming) {
+              setSelectedCapsule(null);
+              setPendingTxHash(null);
+            }
+          }}
           type="detail"
           gift={{
             ...selectedCapsule,
@@ -652,11 +733,20 @@ export default function CapsulesPage() {
 
       <AnimatePresence>
         {successModalData && (
-          <SuccessModal isOpen onClose={() => setSuccessModalData(null)} amount={successModalData.amount} token={successModalData.token} />
+          <SuccessModal
+            isOpen
+            onClose={() => setSuccessModalData(null)}
+            amount={successModalData.amount}
+            token={successModalData.token}
+          />
         )}
       </AnimatePresence>
 
-      <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
+      <DisconnectModal
+        isOpen={showDisconnectAlert}
+        onClose={() => setShowDisconnectAlert(false)}
+        onConfirm={confirmDisconnect}
+      />
     </div>
   );
 }
@@ -665,9 +755,15 @@ export default function CapsulesPage() {
 
 function FilterChip({ isActive, onClick, label }: any) {
   return (
-    <button onClick={onClick}
-      className={cn("rounded-full px-4 py-2 text-xs font-bold transition-colors border",
-        isActive ? "bg-blue-600 border-blue-600 text-white shadow-md" : "bg-white border-gray-200 text-black hover:bg-gray-100")}>
+    <button
+      onClick={onClick}
+      className={cn(
+        "rounded-full px-4 py-2 text-xs font-bold transition-colors border",
+        isActive
+          ? "bg-blue-600 border-blue-600 text-white shadow-md"
+          : "bg-white border-gray-200 text-black hover:bg-gray-100"
+      )}
+    >
       {label}
     </button>
   );
@@ -675,9 +771,13 @@ function FilterChip({ isActive, onClick, label }: any) {
 
 function TabButton({ isActive, onClick, label }: any) {
   return (
-    <button onClick={onClick}
-      className={cn("flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200",
-        isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200",
+        isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground"
+      )}
+    >
       {label}
     </button>
   );
@@ -697,8 +797,12 @@ function SuccessModal({ isOpen, onClose, amount, token }: any) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-        className="w-full max-w-sm rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="w-full max-w-sm rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card"
+      >
         <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
           <PartyPopper className="h-10 w-10 text-blue-600 animate-bounce" />
         </div>
@@ -708,7 +812,12 @@ function SuccessModal({ isOpen, onClose, amount, token }: any) {
           <span className="text-4xl font-black text-blue-600">{amount}</span>
           <span className="text-sm font-bold text-muted-foreground">{token}</span>
         </div>
-        <Button onClick={onClose} className="h-14 w-full rounded-full text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white">Close</Button>
+        <Button
+          onClick={onClose}
+          className="h-14 w-full rounded-full text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          Close
+        </Button>
       </motion.div>
     </div>
   );
@@ -718,16 +827,28 @@ function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card"
+      >
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
           <AlertCircle className="h-6 w-6" />
         </div>
         <h3 className="mb-2 text-lg font-bold">Disconnect Wallet?</h3>
-        <p className="mb-6 text-sm text-muted-foreground">You will need to reconnect to view your gifts.</p>
+        <p className="mb-6 text-sm text-muted-foreground">
+          You will need to reconnect to view your gifts.
+        </p>
         <div className="grid grid-cols-2 gap-3">
-          <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">Cancel</Button>
-          <Button onClick={onConfirm} className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white">Disconnect</Button>
+          <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">
+            Cancel
+          </Button>
+          <Button
+            onClick={onConfirm}
+            className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white"
+          >
+            Disconnect
+          </Button>
         </div>
       </motion.div>
     </div>
@@ -742,7 +863,12 @@ function NotConnectedState({ onConnect }: any) {
       </div>
       <h2 className="text-2xl font-black mb-2">Connect Wallet</h2>
       <p className="text-muted-foreground mb-8 max-w-[200px]">Connect to view your gifts.</p>
-      <Button onClick={onConnect} className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none">Connect</Button>
+      <Button
+        onClick={onConnect}
+        className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none"
+      >
+        Connect
+      </Button>
     </div>
   );
 }
