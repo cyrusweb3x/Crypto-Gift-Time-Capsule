@@ -1,7 +1,9 @@
 // app/capsules/error.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { AlertCircle } from "lucide-react";
 
 export default function Error({
   error,
@@ -10,134 +12,27 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const [details, setDetails] = useState({
-    name: "",
-    message: "",
-    stack: "",
-    digest: "",
-  });
-
   useEffect(() => {
-    console.error("FULL ERROR OBJECT:", error);
-    console.error("ERROR NAME:", error?.name);
-    console.error("ERROR MESSAGE:", error?.message);
-    console.error("ERROR STACK:", error?.stack);
-
-    setDetails({
-      name: error?.name || "undefined",
-      message: error?.message || "undefined",
-      stack: error?.stack || "undefined",
-      digest: error?.digest || "undefined",
-    });
+    console.error("Capsules page error:", error);
   }, [error]);
 
   return (
-    <div style={{ 
-      minHeight: "100vh", 
-      background: "#fff", 
-      padding: "20px",
-      fontFamily: "monospace"
-    }}>
-      <h1 style={{ color: "red", fontSize: "20px", marginBottom: "20px" }}>
-        DEBUG ERROR PAGE
-      </h1>
-
-      <div style={{ 
-        background: "#fee2e2", 
-        border: "1px solid red", 
-        borderRadius: "8px", 
-        padding: "16px",
-        marginBottom: "12px"
-      }}>
-        <strong>Error Name:</strong>
-        <div style={{ 
-          background: "white", 
-          padding: "8px", 
-          marginTop: "4px",
-          wordBreak: "break-all",
-          minHeight: "30px"
-        }}>
-          {details.name}
+    <div className="min-h-screen bg-background flex items-center justify-center p-6">
+      <div className="flex flex-col items-center text-center max-w-sm">
+        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
+          <AlertCircle className="h-8 w-8 text-red-600" />
         </div>
+        <h2 className="text-xl font-bold mb-2">Something went wrong</h2>
+        <p className="text-muted-foreground text-sm mb-6">
+          Failed to load your capsules. Please try again.
+        </p>
+        <Button
+          onClick={reset}
+          className="rounded-full px-8 font-bold bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          Try Again
+        </Button>
       </div>
-
-      <div style={{ 
-        background: "#fee2e2", 
-        border: "1px solid red", 
-        borderRadius: "8px", 
-        padding: "16px",
-        marginBottom: "12px"
-      }}>
-        <strong>Error Message:</strong>
-        <div style={{ 
-          background: "white", 
-          padding: "8px", 
-          marginTop: "4px",
-          wordBreak: "break-all",
-          minHeight: "30px"
-        }}>
-          {details.message}
-        </div>
-      </div>
-
-      <div style={{ 
-        background: "#fee2e2", 
-        border: "1px solid red", 
-        borderRadius: "8px", 
-        padding: "16px",
-        marginBottom: "12px"
-      }}>
-        <strong>Digest:</strong>
-        <div style={{ 
-          background: "white", 
-          padding: "8px", 
-          marginTop: "4px",
-          wordBreak: "break-all",
-          minHeight: "30px"
-        }}>
-          {details.digest}
-        </div>
-      </div>
-
-      <div style={{ 
-        background: "#fee2e2", 
-        border: "1px solid red", 
-        borderRadius: "8px", 
-        padding: "16px",
-        marginBottom: "20px"
-      }}>
-        <strong>Stack Trace:</strong>
-        <pre style={{ 
-          background: "white", 
-          padding: "8px", 
-          marginTop: "4px",
-          wordBreak: "break-all",
-          whiteSpace: "pre-wrap",
-          fontSize: "11px",
-          maxHeight: "300px",
-          overflow: "auto",
-          minHeight: "50px"
-        }}>
-          {details.stack}
-        </pre>
-      </div>
-
-      <button
-        onClick={reset}
-        style={{
-          width: "100%",
-          background: "red",
-          color: "white",
-          padding: "12px",
-          border: "none",
-          borderRadius: "8px",
-          fontSize: "16px",
-          fontWeight: "bold",
-          cursor: "pointer"
-        }}
-      >
-        Try Again
-      </button>
     </div>
   );
 }
