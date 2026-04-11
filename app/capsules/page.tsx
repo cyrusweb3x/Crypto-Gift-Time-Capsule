@@ -26,6 +26,8 @@ const PUBLIC_RPC = "https://mainnet.base.org";
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 const ZERO_BIG = BigInt(0);
 
+// ── Helpers ───────────────────────────────────────────────────────
+
 const safeParseMessage = (rawMsg: any) => {
   try {
     if (!rawMsg || typeof rawMsg !== "string" || !rawMsg.trim()) return { content: "", isAnonymous: false };
@@ -73,10 +75,10 @@ const safeUnlockDate = (unlockTime: number): Date => {
   } catch { return new Date(Date.now() + 86400000); }
 };
 
+// ── Basename resolver ─────────────────────────────────────────────
 const nameCache = new Map<string, string>();
 
 const resolveBasename = async (address: string): Promise<string> => {
-  if (!address) return "Unknown";
   if (nameCache.has(address)) return nameCache.get(address)!;
   try {
     const { getName } = await import("@coinbase/onchainkit/identity");
@@ -105,6 +107,7 @@ const safeGetIdentity = async (address: string) => {
   return { name: null, avatar: null };
 };
 
+// ── Gift Parser ───────────────────────────────────────────────────
 const parseGift = (id: number, g: any, myAddress: string) => {
   try {
     const sender      = String(g[0] ?? "");
@@ -138,6 +141,7 @@ const parseGift = (id: number, g: any, myAddress: string) => {
       txHash: "",
       isMine:  sender.toLowerCase() === me,
       isForMe: recipient.toLowerCase() === me,
+      // basename placeholders - will be filled async
       senderName: short(sender),
       recipientName: short(recipient),
     };
@@ -147,24 +151,27 @@ const parseGift = (id: number, g: any, myAddress: string) => {
   }
 };
 
+// ── Red Packet Parser ─────────────────────────────────────────────
 const parseRedPacket = (id: number, rp: any, myAddress: string) => {
   try {
-    const creator           = String(rp[1] ?? "");
-    const tokenAddr         = String(rp[2] ?? "");
-    const totalAmt          = rp[3] ?? ZERO_BIG;
-    const remainingAmt      = rp[4] ?? ZERO_BIG;
-    const maxClaimers       = Number(rp[5] ?? 0);
+    const creator          = String(rp[1] ?? "");
+    const tokenAddr        = String(rp[2] ?? "");
+    const totalAmt         = rp[3] ?? ZERO_BIG;
+    const remainingAmt     = rp[4] ?? ZERO_BIG;
+    const maxClaimers      = Number(rp[5] ?? 0);
     const remainingClaimers = Number(rp[6] ?? 0);
-    const unlockTime        = Number(rp[7] ?? 0);
-    const isAnon            = Boolean(rp[9]);
-    const isCancelled       = Boolean(rp[10]);
-    const rawMsg            = String(rp[11] ?? "");
+    const unlockTime       = Number(rp[7] ?? 0);
+    const isAnon           = Boolean(rp[9]);
+    const isCancelled      = Boolean(rp[10]);
+    const rawMsg           = String(rp[11] ?? "");
 
     if (isZero(creator)) return null;
 
-    const isETH  = isZero(tokenAddr);
-    const token  = isETH ? "ETH" : "USDC";
-    const amount = isETH ? safeFormatEther(totalAmt) : safeFormatUnits(totalAmt, 6);
+    const isETH   = isZero(tokenAddr);
+    const token   = isETH ? "ETH" : "USDC";
+    const amount  = isETH ? safeFormatEther(totalAmt) : safeFormatUnits(totalAmt, 6);
+
+    // ✅ Claimed count = maxClaimers - remainingClaimers
     const claimedCount = maxClaimers - remainingClaimers;
 
     const { content } = safeParseMessage(rawMsg);
@@ -186,6 +193,7 @@ const parseRedPacket = (id: number, rp: any, myAddress: string) => {
       isRedPacket: true,
       isCancelled,
       txHash: "",
+      // ✅ Red Packet stats
       maxClaimers,
       remainingClaimers,
       claimedCount,
@@ -193,7 +201,6 @@ const parseRedPacket = (id: number, rp: any, myAddress: string) => {
       isMine:  creator.toLowerCase() === me,
       isForMe: creator.toLowerCase() !== me,
       senderName: short(creator),
-      recipientName: "Multiple",
     };
   } catch (err) {
     console.error(`parseRedPacket #${id} failed:`, err);
@@ -201,6 +208,7 @@ const parseRedPacket = (id: number, rp: any, myAddress: string) => {
   }
 };
 
+// ── Main Component ────────────────────────────────────────────────
 export default function CapsulesPage() {
   const [mounted, setMounted] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -252,6 +260,8 @@ export default function CapsulesPage() {
       setIsConnected(true);
       localStorage.setItem(STORAGE_KEY, "true");
       await fetchBalances(acc, _p);
+
+      // ✅ Basename + Avatar fetch
       const { name, avatar: avt } = await safeGetIdentity(acc);
       if (name) setBasename(name);
       else setBasename(short(acc));
@@ -296,7 +306,8 @@ export default function CapsulesPage() {
     }
   }, [mounted, checkConnection, confirmDisconnect]);
 
-  const resolveNames = useCallback(async (capsules: any[], setter: (v: any[]) => void) => {
+  // ✅ Basename resolve for capsule cards async
+  const resolveNames = useCallback(async (capsules: any[], setter: any) => {
     const updated = await Promise.all(
       capsules.map(async (c) => {
         if (!c) return c;
@@ -317,23 +328,26 @@ export default function CapsulesPage() {
     setFetchError(null);
 
     try {
+      // ✅ Public RPC দিয়ে read - provider না থাকলেও কাজ করবে
       const readProvider = new JsonRpcProvider(PUBLIC_RPC);
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, readProvider);
 
       const sent: any[] = [];
       const received: any[] = [];
 
-      // Sent Gifts
+      // ✅ userSentGifts দিয়ে sent gifts fetch
       try {
         const totalGifts = Number(await contract.giftCounter());
         if (totalGifts > 0) {
           const sentIds: number[] = [];
-          for (let i = 0; i < totalGifts; i++) {
+          for (let i = 1; i <= totalGifts; i++) {
             try {
-              const giftId = await contract.userSentGifts(address, i);
+              const giftId = await contract.userSentGifts(address, i - 1);
               if (giftId && Number(giftId) > 0) sentIds.push(Number(giftId));
             } catch { break; }
           }
+
+          // Fallback: scan all if userSentGifts fails
           if (sentIds.length === 0) {
             const batchSize = 5;
             for (let i = totalGifts; i >= 1; i -= batchSize) {
@@ -362,18 +376,20 @@ export default function CapsulesPage() {
         }
       } catch (err) { console.error("sent gifts error:", err); }
 
-      // Received Gifts
+      // ✅ userReceivedGifts দিয়ে received gifts fetch
       try {
         const totalGifts = Number(await contract.giftCounter());
         if (totalGifts > 0) {
           const receivedIds: number[] = [];
-          for (let i = 0; i < totalGifts; i++) {
+          for (let i = 1; i <= totalGifts; i++) {
             try {
-              const giftId = await contract.userReceivedGifts(address, i);
+              const giftId = await contract.userReceivedGifts(address, i - 1);
               if (giftId && Number(giftId) > 0) receivedIds.push(Number(giftId));
             } catch { break; }
           }
+
           if (receivedIds.length === 0) {
+            // Fallback: scan all
             const batchSize = 5;
             for (let i = totalGifts; i >= 1; i -= batchSize) {
               const batch: Promise<any>[] = [];
@@ -401,7 +417,7 @@ export default function CapsulesPage() {
         }
       } catch (err) { console.error("received gifts error:", err); }
 
-      // Created Red Packets
+      // ✅ userCreatedRedPackets দিয়ে sent red packets fetch
       try {
         const totalRPs = Number(await contract.redPacketCounter());
         if (totalRPs > 0) {
@@ -412,7 +428,9 @@ export default function CapsulesPage() {
               if (rpId && Number(rpId) > 0) createdIds.push(Number(rpId));
             } catch { break; }
           }
+
           if (createdIds.length === 0) {
+            // Fallback
             const batchSize = 5;
             for (let i = totalRPs; i >= 1; i -= batchSize) {
               const batch: Promise<any>[] = [];
@@ -440,7 +458,7 @@ export default function CapsulesPage() {
         }
       } catch (err) { console.error("created red packets error:", err); }
 
-      // Claimed Red Packets
+      // ✅ userClaimedRedPackets দিয়ে received red packets fetch
       try {
         const totalRPs = Number(await contract.redPacketCounter());
         if (totalRPs > 0) {
@@ -451,6 +469,7 @@ export default function CapsulesPage() {
               if (rpId && Number(rpId) > 0) claimedIds.push(Number(rpId));
             } catch { break; }
           }
+
           if (claimedIds.length > 0) {
             const results = await Promise.all(claimedIds.map(id => contract.redPackets(id).catch(() => null)));
             results.forEach((rp, idx) => {
@@ -468,12 +487,13 @@ export default function CapsulesPage() {
         return nb - na;
       };
 
-      const sortedSent     = sent.sort(byIdDesc);
+      const sortedSent = sent.sort(byIdDesc);
       const sortedReceived = received.sort(byIdDesc);
 
       setMySentCapsules(sortedSent);
       setMyReceivedCapsules(sortedReceived);
 
+      // ✅ Async basename resolve
       resolveNames(sortedSent, setMySentCapsules);
       resolveNames(sortedReceived, setMyReceivedCapsules);
 
@@ -521,6 +541,7 @@ export default function CapsulesPage() {
   const handleClaim = async () => {
     if (!selectedCapsule || !signer) return;
 
+    // ✅ Red Packet claim
     if (selectedCapsule.isRedPacket) {
       const rpIdNum = parseInt(String(selectedCapsule.id).replace("rp-", ""));
       if (isNaN(rpIdNum) || rpIdNum <= 0) { alert("Invalid Red Packet ID"); return; }
@@ -528,8 +549,10 @@ export default function CapsulesPage() {
       setIsClaiming(true); setPendingTxHash(null);
       try {
         const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
+
         const claimEncodedData = contract.interface.encodeFunctionData("claimRedPacket", [BigInt(rpIdNum)]);
         const claimDataWithCode = appendBuilderCode(claimEncodedData);
+
         const tx = await signer.sendTransaction({ to: CONTRACT_ADDRESS, data: claimDataWithCode });
         setPendingTxHash(tx.hash);
 
@@ -541,6 +564,8 @@ export default function CapsulesPage() {
         }
 
         if (receipt && receipt.status === 1) {
+          // ✅ Get claimed amount from event log
+          let claimedAmount = selectedCapsule.amount;
           try {
             const readProvider = new JsonRpcProvider(PUBLIC_RPC);
             const readContract = new Contract(CONTRACT_ADDRESS, contractAbi, readProvider);
@@ -550,7 +575,8 @@ export default function CapsulesPage() {
               setMyReceivedCapsules(p => p.map(c => c?.id === selectedCapsule.id ? { ...c, ...parsed, isWithdrawn: true } : c));
             }
           } catch { }
-          setSuccessModalData({ amount: selectedCapsule.amount, token: selectedCapsule.token });
+
+          setSuccessModalData({ amount: claimedAmount, token: selectedCapsule.token });
           setSelectedCapsule(null);
           fetchCapsules(true);
         } else if (receipt && receipt.status === 0) {
@@ -567,6 +593,7 @@ export default function CapsulesPage() {
       return;
     }
 
+    // ✅ Gift claim
     const giftIdNum = parseInt(String(selectedCapsule.id).replace("gift-", ""));
     if (isNaN(giftIdNum) || giftIdNum <= 0) { alert("Invalid gift ID"); return; }
 
@@ -642,6 +669,7 @@ export default function CapsulesPage() {
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
+            {/* Wallet Card */}
             <div className="mb-8 rounded-3xl bg-secondary p-6">
               <div className="flex items-center gap-4 mb-6">
                 <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm">
@@ -654,6 +682,7 @@ export default function CapsulesPage() {
                     )}
                 </div>
                 <div>
+                  {/* ✅ basename দেখাবে */}
                   <h3 className="text-lg font-bold">{basename || short(address)}</h3>
                   <button onClick={handleCopy} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
                     {short(address)}
@@ -714,16 +743,13 @@ export default function CapsulesPage() {
                   {sentList.length > 0
                     ? sentList.map(c => (
                       <CapsuleCard
-                        key={c.id}
-                        type="sent"
+                        key={c.id} type="sent"
+                        // ✅ basename দেখাবে
                         recipient={c.isRedPacket ? "Multiple Recipients" : (c.recipientName || short(c.recipient))}
-                        amount={c.amount}
-                        token={c.token}
-                        unlockDate={c.unlockDate}
-                        isUnlocked={c.isUnlocked}
-                        message={c.message}
-                        txHash={c.txHash}
+                        amount={c.amount} token={c.token} unlockDate={c.unlockDate}
+                        isUnlocked={c.isUnlocked} message={c.message} txHash={c.txHash}
                         isWithdrawn={c.isWithdrawn}
+                        // ✅ Red Packet stats
                         isRedPacket={c.isRedPacket}
                         maxClaimers={c.maxClaimers}
                         claimedCount={c.claimedCount}
@@ -739,21 +765,22 @@ export default function CapsulesPage() {
                   {receivedList.length > 0
                     ? receivedList.map(c => (
                       <CapsuleCard
-                        key={c.id}
-                        type="received"
+                        key={c.id} type="received"
+                        // ✅ basename দেখাবে
                         sender={
                           c.isRedPacket
                             ? `🧧 Red Packet from ${c.isAnonymous ? "Secret" : (c.senderName || short(c.sender))}`
                             : c.isAnonymous ? "Secret Sender" : (c.senderName || short(c.sender))
                         }
-                        amount={c.amount}
-                        token={c.token}
-                        unlockDate={c.unlockDate}
-                        isUnlocked={c.isUnlocked}
-                        isWithdrawn={c.isWithdrawn}
-                        message={c.message}
-                        txHash={c.txHash}
-                        onClaim={c.isUnlocked && !c.isWithdrawn ? () => setSelectedCapsule(c) : undefined}
+                        amount={c.amount} token={c.token} unlockDate={c.unlockDate}
+                        isUnlocked={c.isUnlocked} isWithdrawn={c.isWithdrawn}
+                        message={c.message} txHash={c.txHash}
+                        // ✅ Red Packet claim button
+                        onClaim={
+                          c.isUnlocked && !c.isWithdrawn
+                            ? () => setSelectedCapsule(c)
+                            : undefined
+                        }
                         onClick={() => setSelectedCapsule(c)}
                         isRedPacket={c.isRedPacket}
                         maxClaimers={c.maxClaimers}
@@ -797,6 +824,8 @@ export default function CapsulesPage() {
     </div>
   );
 }
+
+// ── Sub Components ────────────────────────────────────────────────
 
 function FilterChip({ isActive, onClick, label }: any) {
   return (
