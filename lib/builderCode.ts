@@ -1,17 +1,21 @@
 // lib/builderCode.ts
 
-export function getBuilderCodeSuffix(): string {
-  const code = "bc_5f8xm7gq";
-  const hex = Array.from(new TextEncoder().encode(code))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
-  return hex + "8021802180218021";
-}
+import { Attribution } from "ox/erc8021";
+
+export const DATA_SUFFIX = Attribution.toDataSuffix({
+  codes: ["bc_5f8xm7gq"],
+});
 
 export function appendBuilderCode(encodedData: string): string {
-  const suffix = getBuilderCodeSuffix();
+ 
+  const suffix = DATA_SUFFIX.startsWith("0x")
+    ? DATA_SUFFIX.slice(2)
+    : DATA_SUFFIX;
+
+  
   const clean = encodedData.startsWith("0x")
     ? encodedData.slice(2)
     : encodedData;
+
   return "0x" + clean + suffix;
 }
