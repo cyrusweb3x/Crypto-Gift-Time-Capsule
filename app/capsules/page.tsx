@@ -162,33 +162,37 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // Safe batch fetcher
+      // Safe batch fetcher - returns {id, data} to keep track of ID
       const fetchInBatches = async (total: number, fetchFn: (id: number) => Promise<any>, batchSize = 5) => {
         const results = [];
-        for (let i = total; i >= 0; i -= batchSize) {
+        for (let i = total; i > 0; i -= batchSize) { // Start from total, not total-1
           const batch = [];
-          for (let j = 0; j < batchSize && (i - j) >= 0; j++) {
-            batch.push(fetchFn(i - j).catch((err) => {
-              console.error(`Fetch error for ID ${i-j}:`, err);
+          const batchIds = [];
+          for (let j = 0; j < batchSize && (i - j) > 0; j++) {
+            const id = i - j;
+            batchIds.push(id);
+            batch.push(fetchFn(id).catch((err) => {
+              console.error(`Fetch error for ID ${id}:`, err);
               return null;
             }));
           }
-          results.push(...(await Promise.all(batch)));
+          const batchResults = await Promise.all(batch);
+          batchResults.forEach((data, idx) => {
+            if (data) results.push({ id: batchIds[idx], data });
+          });
           await new Promise(resolve => setTimeout(resolve, 50));
         }
-        return results.filter(Boolean);
+        return results;
       };
 
       // Fetch Gifts
       try {
         const totalGifts = Number(await contract.giftCounter());
-        // fixed: contract.gifts(id) instead of getGiftDetails
         const rawGifts = await fetchInBatches(totalGifts, (id) => contract.gifts(id));
 
-        rawGifts.forEach((gift: any, index: number) => {
+        rawGifts.forEach(({id, data: gift}) => {
           try {
             if (!gift) return;
-            const giftId = gift.id ? gift.id.toString() : index.toString();
             const sender = gift.sender || gift[0];
             const recipient = gift.recipient || gift[1];
             const tokenAddr = gift.token || gift[2];
@@ -205,7 +209,7 @@ export default function CapsulesPage() {
             const isUnlocked = Date.now() >= unlockTime * 1000;
 
             const recData = {
-              id: `gift-${giftId}`,
+              id: `gift-${id}`, // Use the ID we fetched with
               sender,
               recipient,
               amount: amountFormatted,
@@ -233,17 +237,14 @@ export default function CapsulesPage() {
       // Fetch Red Packets
       try {
         const totalRPs = Number(await contract.redPacketCounter());
-        // fixed: contract.redPackets(id) instead of getRedPacketDetails
         const rawRPs = await fetchInBatches(totalRPs, (id) => contract.redPackets(id));
 
-        rawRPs.forEach((rp: any, index: number) => {
+        rawRPs.forEach(({id, data: rp}) => {
           try {
             if (!rp) return;
-            const rpId = rp.id ? rp.id.toString() : index.toString();
-            const sender = rp.creator || rp.sender || rp[0] || ethers.ZeroAddress;
+            const sender = rp.creator || rp[0] || ethers.ZeroAddress;
             const tokenAddr = rp.token || rp[1] || ethers.ZeroAddress;
-            // fixed: replaced 0n with 0 to resolve typescript error
-            const totalAmountRaw = rp.totalAmount || rp.amount || rp[2] || 0;
+            const totalAmountRaw = rp.totalAmount || rp[2] || 0;
             const unlockTime = Number(rp.unlockTime || rp[3] || 0);
             const rawMsg = rp.message || rp[4] || "";
 
@@ -255,7 +256,7 @@ export default function CapsulesPage() {
             const isUnlocked = Date.now() >= unlockTime * 1000;
 
             const rpData = {
-              id: `rp-${rpId}`,
+              id: `rp-${id}`, // Use the ID we fetched with
               sender,
               recipient: "Multiple",
               amount: amountFormatted,
@@ -339,9 +340,14 @@ export default function CapsulesPage() {
   const handleClaim = async () => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
     
-    // Safety check for ID
-    const giftIdStr = selectedCapsule.id?.toString().replace('gift-', '');
-    if (!giftIdStr) {
+    // Extract gift ID properly
+    let giftIdStr = selectedCapsule.id;
+    if (typeof giftIdStr === 'string' && giftIdStr.includes('gift-')) {
+      giftIdStr = giftIdStr.replace('gift-', '');
+    }
+    
+    const giftIdNum = parseInt(giftIdStr);
+    if (isNaN(giftIdNum) || giftIdNum <= 0) {
       alert("Invalid gift ID");
       return;
     }
@@ -349,9 +355,27 @@ export default function CapsulesPage() {
     setIsClaiming(true);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-      const tx = await contract.withdrawGift(BigInt(giftIdStr));
       
-      // 60 second timeout to avoid "timeout of 5000ms exceeded" error
+      // Verify gift exists before claiming
+      try {
+        const giftDetails = await contract.gifts(giftIdNum);
+        if (giftDetails.sender === ethers.ZeroAddress) {
+          alert("This gift does not exist");
+          return;
+        }
+        if (giftDetails.isWithdrawn) {
+          alert("This gift was already claimed");
+          return;
+        }
+        if (Math.floor(Date.now() / 1000) < Number(giftDetails.unlockTime)) {
+          alert("This gift is still locked");
+          return;
+        }
+      } catch (err) {
+        console.error("Verification error:", err);
+      }
+      
+      const tx = await contract.withdrawGift(BigInt(giftIdNum));
       await tx.wait(1, 60000);
 
       const claimedAmount = selectedCapsule.amount;
@@ -363,16 +387,21 @@ export default function CapsulesPage() {
 
       fetchCapsules(true);
     } catch (error: any) { 
-        console.error("Claim error:", error);
-        
-        // Better error messages
-        if (error?.code === "TIMEOUT" || error?.message?.includes("timeout")) {
-          alert("Transaction is taking longer than expected. Please wait a minute and refresh the page to see if it was successful.");
-        } else {
-          alert("Claim failed: " + (error?.reason || error?.message || "Unknown error")); 
-        }
+      console.error("Claim error:", error);
+      
+      if (error?.message?.includes("GiftDoesNotExist") || error?.data === "0x0ce10b5f") {
+        alert("Error: Gift not found");
+      } else if (error?.message?.includes("StillLocked")) {
+        alert("Error: Gift is locked");
+      } else if (error?.message?.includes("AlreadyWithdrawn")) {
+        alert("Error: Already claimed");
+      } else if (error?.message?.includes("NotAuthorized")) {
+        alert("Error: Not authorized");
+      } else {
+        alert("Claim failed: " + (error?.reason || error?.message || "Unknown error")); 
+      }
     } finally { 
-        setIsClaiming(false); 
+      setIsClaiming(false); 
     }
   };
 
