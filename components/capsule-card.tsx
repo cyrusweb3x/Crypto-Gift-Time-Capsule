@@ -11,8 +11,8 @@ interface CapsuleCardProps {
   sender?: string;
   recipient?: string;
   amount: string;
-  token: string; // Changed strict type to string to support flexibility
-  unlockDate: Date;
+  token: string;
+  unlockDate: Date | string | number; // ✅ সব type accept করে
   isUnlocked: boolean;
   isWithdrawn?: boolean;
   message?: string;
@@ -20,6 +20,25 @@ interface CapsuleCardProps {
   onClaim?: () => void;
   onClick?: () => void;
 }
+
+// ✅ যেকোনো input থেকে safe Date বানায়
+const toSafeDate = (unlockDate: Date | string | number): Date => {
+  try {
+    if (unlockDate instanceof Date) {
+      if (!isNaN(unlockDate.getTime())) return unlockDate;
+    }
+    if (typeof unlockDate === "number") {
+      const d = new Date(unlockDate);
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (typeof unlockDate === "string") {
+      const d = new Date(unlockDate);
+      if (!isNaN(d.getTime())) return d;
+    }
+  } catch { /* ignore */ }
+  // fallback: আগামীকাল
+  return new Date(Date.now() + 86400000);
+};
 
 export function CapsuleCard({
   type,
@@ -35,43 +54,52 @@ export function CapsuleCard({
 }: CapsuleCardProps) {
   const [timeLeft, setTimeLeft] = useState("");
 
-  // --- Real-time Countdown Logic (Updated for Seconds) ---
+  // ✅ একবার safe Date বানাও
+  const safeDateObj = toSafeDate(unlockDate);
+
   useEffect(() => {
     if (isWithdrawn || isUnlocked) return;
-    
+
     const updateTimer = () => {
-      const now = new Date();
-      const diff = unlockDate.getTime() - now.getTime();
+      try {
+        const now = new Date();
+        const diff = safeDateObj.getTime() - now.getTime();
 
-      if (diff <= 0) {
-        setTimeLeft("Ready");
-        return;
+        if (diff <= 0) {
+          setTimeLeft("Ready");
+          return;
+        }
+
+        const days    = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours   = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+        if (days > 0) {
+          setTimeLeft(`${days}d ${hours}h left`);
+        } else if (hours > 0) {
+          setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
+        } else {
+          setTimeLeft(`${minutes}m ${seconds}s`);
+        }
+      } catch {
+        setTimeLeft("--");
       }
-
-      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-      let timeString = "";
-      if (days > 0) {
-        // যদি ১ দিনের বেশি বাকি থাকে, সেকেন্ড দেখানোর দরকার নেই
-        timeString = `${days}d ${hours}h left`;
-      } else if (hours > 0) {
-        timeString = `${hours}h ${minutes}m ${seconds}s`;
-      } else {
-        // ১ ঘন্টার কম সময় বাকি থাকলে মিনিট ও সেকেন্ড দেখাবে
-        timeString = `${minutes}m ${seconds}s`;
-      }
-
-      setTimeLeft(timeString);
     };
 
     updateTimer();
-    // Update every second (1000ms) instead of 60000ms
-    const interval = setInterval(updateTimer, 1000); 
+    const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [unlockDate, isWithdrawn, isUnlocked]);
+  }, [safeDateObj, isWithdrawn, isUnlocked]);
+
+  // ✅ Safe date display
+  const displayDate = (() => {
+    try {
+      return safeDateObj.toLocaleDateString();
+    } catch {
+      return "--";
+    }
+  })();
 
   return (
     <motion.div
@@ -92,8 +120,9 @@ export function CapsuleCard({
         </div>
 
         {/* Status Badge */}
-        <div className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border",
-          isWithdrawn 
+        <div className={cn(
+          "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border",
+          isWithdrawn
             ? "bg-muted text-muted-foreground border-border"
             : isUnlocked
             ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
@@ -113,14 +142,15 @@ export function CapsuleCard({
       <div className="mb-4 flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
           {token === "ETH" ? (
-             <div className="h-6 w-6 rounded-full bg-purple-500/20 text-purple-600 flex items-center justify-center font-bold text-xs">Ξ</div>
+            <div className="h-6 w-6 rounded-full bg-purple-500/20 text-purple-600 flex items-center justify-center font-bold text-xs">Ξ</div>
           ) : (
-             <div className="h-6 w-6 rounded-full bg-blue-500/20 text-blue-600 flex items-center justify-center font-bold text-xs">$</div>
+            <div className="h-6 w-6 rounded-full bg-blue-500/20 text-blue-600 flex items-center justify-center font-bold text-xs">$</div>
           )}
         </div>
         <div>
           <h4 className="text-xl font-bold text-foreground">
-            {amount} <span className="text-sm font-normal text-muted-foreground">{token}</span>
+            {amount}{" "}
+            <span className="text-sm font-normal text-muted-foreground">{token}</span>
           </h4>
         </div>
       </div>
@@ -128,28 +158,35 @@ export function CapsuleCard({
       {/* Bottom Row: Date & Action */}
       <div className="flex items-center justify-between border-t border-border pt-3">
         <div className="flex flex-col">
-            <span className="text-[10px] text-muted-foreground">
-                {isUnlocked && !isWithdrawn ? "Status" : "Unlock Date"}
-            </span>
-            <span className={cn("text-xs font-bold tabular-nums", !isUnlocked && !isWithdrawn ? "text-orange-600" : "text-foreground")}>
-                {!isUnlocked && !isWithdrawn ? `Opens in ${timeLeft}` : isUnlocked && !isWithdrawn ? "Ready to Claim" : unlockDate.toLocaleDateString()}
-            </span>
+          <span className="text-[10px] text-muted-foreground">
+            {isUnlocked && !isWithdrawn ? "Status" : "Unlock Date"}
+          </span>
+          <span className={cn(
+            "text-xs font-bold tabular-nums",
+            !isUnlocked && !isWithdrawn ? "text-orange-600" : "text-foreground"
+          )}>
+            {!isUnlocked && !isWithdrawn
+              ? `Opens in ${timeLeft}`
+              : isUnlocked && !isWithdrawn
+              ? "Ready to Claim"
+              : displayDate  // ✅ safe string
+            }
+          </span>
         </div>
 
         {onClaim ? (
-          <Button 
-            size="sm" 
+          <Button
+            size="sm"
             onClick={(e) => {
               e.stopPropagation();
               onClaim();
             }}
-            // Claim button is now Blue
             className="h-8 bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 rounded-full font-bold shadow-md hover:shadow-lg transition-all"
           >
             Claim
           </Button>
         ) : (
-            <ArrowRight className="h-4 w-4 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" />
+          <ArrowRight className="h-4 w-4 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
     </motion.div>

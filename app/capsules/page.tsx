@@ -24,9 +24,9 @@ const STORAGE_KEY = "yupp_wallet_connected";
 const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
-// ─── Helpers ──────────────────────────────────────────────────────
-
 const ZERO_BIG = BigInt(0);
+
+// ─── Helpers ──────────────────────────────────────────────────────
 
 const safeParseMessage = (rawMsg: any) => {
   try {
@@ -90,6 +90,19 @@ const short = (addr: any): string => {
   } catch { return "Unknown"; }
 };
 
+// ✅ unlockTime থেকে safe Date object বানায়
+const safeUnlockDate = (unlockTime: number): Date => {
+  try {
+    const ms = unlockTime * 1000;
+    const d = new Date(ms);
+    // Valid date check
+    if (isNaN(d.getTime())) return new Date(Date.now() + 86400000);
+    return d;
+  } catch {
+    return new Date(Date.now() + 86400000);
+  }
+};
+
 const safeGetIdentity = async (address: string) => {
   try {
     const { getName, getAvatar } = await import("@coinbase/onchainkit/identity");
@@ -104,9 +117,6 @@ const safeGetIdentity = async (address: string) => {
 };
 
 // ─── Gift Parser ──────────────────────────────────────────────────
-// gifts() → [0]sender [1]recipient [2]token [3]amount [4]unlockTime
-//            [5]isWithdrawn [6]message [7]isAnonymous [8]assetType [9]tokenId
-
 const parseGift = (id: number, g: any, myAddress: string) => {
   try {
     const sender      = String(g[0] ?? "");
@@ -127,12 +137,10 @@ const parseGift = (id: number, g: any, myAddress: string) => {
       : safeFormatUnits(amountRaw, 6);
 
     const { content } = safeParseMessage(rawMsg);
-    const isUnlocked  = Date.now() >= unlockTime * 1000;
-
-    let unlockDate = "";
-    try { unlockDate = new Date(unlockTime * 1000).toISOString(); }
-    catch { unlockDate = new Date().toISOString(); }
-
+    
+    // ✅ Date object হিসেবে পাঠাও, string না
+    const unlockDateObj = safeUnlockDate(unlockTime);
+    const isUnlocked    = Date.now() >= unlockDateObj.getTime();
     const me = myAddress.toLowerCase();
 
     return {
@@ -141,7 +149,7 @@ const parseGift = (id: number, g: any, myAddress: string) => {
       recipient,
       amount,
       token,
-      unlockDate,
+      unlockDate: unlockDateObj, // ✅ Date object
       isUnlocked,
       isWithdrawn,
       message: isUnlocked ? content : "🔒 Message is hidden until unlocked",
@@ -159,11 +167,6 @@ const parseGift = (id: number, g: any, myAddress: string) => {
 };
 
 // ─── Red Packet Parser ────────────────────────────────────────────
-// redPackets() → [0]id [1]creator [2]token [3]totalAmount
-//                [4]remainingAmount [5]maxClaimers [6]remainingClaimers
-//                [7]unlockTime [8]isLucky [9]isAnonymous [10]isCancelled
-//                [11]message
-
 const parseRedPacket = (id: number, rp: any, myAddress: string) => {
   try {
     const creator     = String(rp[1] ?? "");
@@ -183,12 +186,10 @@ const parseRedPacket = (id: number, rp: any, myAddress: string) => {
       : safeFormatUnits(totalAmt, 6);
 
     const { content } = safeParseMessage(rawMsg);
-    const isUnlocked  = Date.now() >= unlockTime * 1000;
 
-    let unlockDate = "";
-    try { unlockDate = new Date(unlockTime * 1000).toISOString(); }
-    catch { unlockDate = new Date().toISOString(); }
-
+    // ✅ Date object হিসেবে পাঠাও
+    const unlockDateObj = safeUnlockDate(unlockTime);
+    const isUnlocked    = Date.now() >= unlockDateObj.getTime();
     const me = myAddress.toLowerCase();
 
     return {
@@ -197,7 +198,7 @@ const parseRedPacket = (id: number, rp: any, myAddress: string) => {
       recipient: "Multiple",
       amount,
       token,
-      unlockDate,
+      unlockDate: unlockDateObj, // ✅ Date object
       isUnlocked,
       isWithdrawn: isCancelled,
       message: isUnlocked ? content : "🔒 Message is hidden until unlocked",
@@ -325,7 +326,7 @@ export default function CapsulesPage() {
       const sent: any[] = [];
       const received: any[] = [];
 
-      // ── Gifts ────────────────────────────────────────────────────
+      // ── Gifts ─────────────────────────────────────────────────
       try {
         const totalGifts = Number(await contract.giftCounter());
         console.log("giftCounter:", totalGifts);
@@ -335,7 +336,6 @@ export default function CapsulesPage() {
           for (let i = totalGifts; i >= 1; i -= batchSize) {
             const batch: Promise<any>[] = [];
             const ids: number[] = [];
-
             for (let j = 0; j < batchSize && i - j >= 1; j++) {
               const gid = i - j;
               ids.push(gid);
@@ -346,7 +346,6 @@ export default function CapsulesPage() {
                 })
               );
             }
-
             const results = await Promise.all(batch);
             results.forEach((g, idx) => {
               if (!g) return;
@@ -355,7 +354,6 @@ export default function CapsulesPage() {
               if (parsed.isMine)  sent.push(parsed);
               if (parsed.isForMe) received.push(parsed);
             });
-
             if (i > batchSize) await new Promise(r => setTimeout(r, 80));
           }
         }
@@ -363,7 +361,7 @@ export default function CapsulesPage() {
         console.error("gifts fetch error:", err);
       }
 
-      // ── Red Packets ──────────────────────────────────────────────
+      // ── Red Packets ───────────────────────────────────────────
       try {
         const totalRPs = Number(await contract.redPacketCounter());
         console.log("redPacketCounter:", totalRPs);
@@ -373,7 +371,6 @@ export default function CapsulesPage() {
           for (let i = totalRPs; i >= 1; i -= batchSize) {
             const batch: Promise<any>[] = [];
             const ids: number[] = [];
-
             for (let j = 0; j < batchSize && i - j >= 1; j++) {
               const rid = i - j;
               ids.push(rid);
@@ -384,7 +381,6 @@ export default function CapsulesPage() {
                 })
               );
             }
-
             const results = await Promise.all(batch);
             results.forEach((rp, idx) => {
               if (!rp) return;
@@ -393,7 +389,6 @@ export default function CapsulesPage() {
               if (parsed.isMine)  sent.push(parsed);
               if (parsed.isForMe) received.push(parsed);
             });
-
             if (i > batchSize) await new Promise(r => setTimeout(r, 80));
           }
         }
@@ -435,7 +430,10 @@ export default function CapsulesPage() {
       caps.forEach(c => {
         if (!c?.unlockDate || c.isUnlocked || c.isWithdrawn) return;
         try {
-          const ms = new Date(c.unlockDate).getTime() - Date.now();
+          const unlockMs = c.unlockDate instanceof Date
+            ? c.unlockDate.getTime()
+            : new Date(c.unlockDate).getTime();
+          const ms = unlockMs - Date.now();
           if (ms > 0 && ms < 86400000) {
             timers.push(setTimeout(() => {
               set((prev: any[]) =>
@@ -461,7 +459,6 @@ export default function CapsulesPage() {
     setIsClaiming(true); setPendingTxHash(null);
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-
       try {
         const g = await contract.gifts(giftIdNum);
         if (!g || isZero(g[0])) { alert("Gift does not exist"); setIsClaiming(false); return; }
@@ -583,29 +580,14 @@ export default function CapsulesPage() {
               <div className="mb-4 rounded-2xl bg-red-50 border border-red-200 p-4 flex items-center gap-3">
                 <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
                 <p className="text-sm text-red-600 font-medium flex-1">{fetchError}</p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => fetchCapsules(false)}
-                  className="text-red-600"
-                >
-                  Retry
-                </Button>
+                <Button variant="ghost" size="sm" onClick={() => fetchCapsules(false)} className="text-red-600">Retry</Button>
               </div>
             )}
 
             {/* Tabs */}
             <div className="mb-6 flex rounded-full bg-secondary p-1">
-              <TabButton
-                isActive={activeTab === "received"}
-                onClick={() => setActiveTab("received")}
-                label="Received"
-              />
-              <TabButton
-                isActive={activeTab === "sent"}
-                onClick={() => setActiveTab("sent")}
-                label="Sent"
-              />
+              <TabButton isActive={activeTab === "received"} onClick={() => setActiveTab("received")} label="Received" />
+              <TabButton isActive={activeTab === "sent"} onClick={() => setActiveTab("sent")} label="Sent" />
             </div>
 
             {/* Filters */}
@@ -642,13 +624,7 @@ export default function CapsulesPage() {
                   <p>Loading on-chain data…</p>
                 </div>
               ) : activeTab === "sent" ? (
-                <motion.div
-                  key="sent"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="space-y-4"
-                >
+                <motion.div key="sent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {sentList.length > 0
                     ? sentList.map(c => (
                         <CapsuleCard
@@ -668,13 +644,7 @@ export default function CapsulesPage() {
                   }
                 </motion.div>
               ) : (
-                <motion.div
-                  key="received"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="space-y-4"
-                >
+                <motion.div key="received" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {receivedList.length > 0
                     ? receivedList.map(c => (
                         <CapsuleCard
@@ -714,10 +684,7 @@ export default function CapsulesPage() {
         <GiftModal
           isOpen={!!selectedCapsule}
           onClose={() => {
-            if (!isClaiming) {
-              setSelectedCapsule(null);
-              setPendingTxHash(null);
-            }
+            if (!isClaiming) { setSelectedCapsule(null); setPendingTxHash(null); }
           }}
           type="detail"
           gift={{
@@ -755,15 +722,9 @@ export default function CapsulesPage() {
 
 function FilterChip({ isActive, onClick, label }: any) {
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-4 py-2 text-xs font-bold transition-colors border",
-        isActive
-          ? "bg-blue-600 border-blue-600 text-white shadow-md"
-          : "bg-white border-gray-200 text-black hover:bg-gray-100"
-      )}
-    >
+    <button onClick={onClick}
+      className={cn("rounded-full px-4 py-2 text-xs font-bold transition-colors border",
+        isActive ? "bg-blue-600 border-blue-600 text-white shadow-md" : "bg-white border-gray-200 text-black hover:bg-gray-100")}>
       {label}
     </button>
   );
@@ -771,13 +732,9 @@ function FilterChip({ isActive, onClick, label }: any) {
 
 function TabButton({ isActive, onClick, label }: any) {
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200",
-        isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground"
-      )}
-    >
+    <button onClick={onClick}
+      className={cn("flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200",
+        isActive ? "bg-white text-black shadow-sm" : "text-muted-foreground hover:text-foreground")}>
       {label}
     </button>
   );
@@ -797,12 +754,8 @@ function SuccessModal({ isOpen, onClose, amount, token }: any) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="w-full max-w-sm rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card"
-      >
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+        className="w-full max-w-sm rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card">
         <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
           <PartyPopper className="h-10 w-10 text-blue-600 animate-bounce" />
         </div>
@@ -812,12 +765,7 @@ function SuccessModal({ isOpen, onClose, amount, token }: any) {
           <span className="text-4xl font-black text-blue-600">{amount}</span>
           <span className="text-sm font-bold text-muted-foreground">{token}</span>
         </div>
-        <Button
-          onClick={onClose}
-          className="h-14 w-full rounded-full text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white"
-        >
-          Close
-        </Button>
+        <Button onClick={onClose} className="h-14 w-full rounded-full text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white">Close</Button>
       </motion.div>
     </div>
   );
@@ -827,28 +775,16 @@ function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card"
-      >
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
           <AlertCircle className="h-6 w-6" />
         </div>
         <h3 className="mb-2 text-lg font-bold">Disconnect Wallet?</h3>
-        <p className="mb-6 text-sm text-muted-foreground">
-          You will need to reconnect to view your gifts.
-        </p>
+        <p className="mb-6 text-sm text-muted-foreground">You will need to reconnect to view your gifts.</p>
         <div className="grid grid-cols-2 gap-3">
-          <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">
-            Cancel
-          </Button>
-          <Button
-            onClick={onConfirm}
-            className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white"
-          >
-            Disconnect
-          </Button>
+          <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">Cancel</Button>
+          <Button onClick={onConfirm} className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white">Disconnect</Button>
         </div>
       </motion.div>
     </div>
@@ -863,12 +799,7 @@ function NotConnectedState({ onConnect }: any) {
       </div>
       <h2 className="text-2xl font-black mb-2">Connect Wallet</h2>
       <p className="text-muted-foreground mb-8 max-w-[200px]">Connect to view your gifts.</p>
-      <Button
-        onClick={onConnect}
-        className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none"
-      >
-        Connect
-      </Button>
+      <Button onClick={onConnect} className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none">Connect</Button>
     </div>
   );
 }
