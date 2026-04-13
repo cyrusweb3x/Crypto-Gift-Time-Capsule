@@ -323,15 +323,18 @@ export default function CapsulesPage() {
   const [pendingTxHash, setPendingTxHash] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
+  // Stable ref so fetchCapsules always reads latest provider/address
   const providerRef = useRef(provider);
   const addressRef = useRef(address);
   useEffect(() => { providerRef.current = provider; }, [provider]);
   useEffect(() => { addressRef.current = address; }, [address]);
 
+  // ── Mount ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     setMounted(true);
   }, []);
 
+  // ── Balances ───────────────────────────────────────────────────────────────
   const fetchBalances = useCallback(
     async (acc: string, _p: BrowserProvider): Promise<void> => {
       try {
@@ -348,6 +351,7 @@ export default function CapsulesPage() {
     []
   );
 
+  // ── Wallet Setup ───────────────────────────────────────────────────────────
   const setupWallet = useCallback(
     async (acc: string, _p: BrowserProvider): Promise<void> => {
       try {
@@ -373,6 +377,7 @@ export default function CapsulesPage() {
         setIsConnected(true);
         localStorage.setItem(STORAGE_KEY, "true");
 
+        // Non-blocking parallel tasks
         void fetchBalances(acc, _p);
         void safeGetIdentity(acc).then(({ name, avatar: avt }) => {
           if (name) setBasename(name);
@@ -385,6 +390,7 @@ export default function CapsulesPage() {
     [fetchBalances]
   );
 
+  // ── Connection ─────────────────────────────────────────────────────────────
   const checkConnection = useCallback(async (): Promise<void> => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
@@ -425,12 +431,14 @@ export default function CapsulesPage() {
     setShowDisconnectAlert(false);
   }, []);
 
+  // ── Auto-connect ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mounted) return;
     if (localStorage.getItem(STORAGE_KEY) === "true") {
       void checkConnection();
     }
     if (typeof window === "undefined" || !window.ethereum) return;
+
     const onChange = (accs: string[]): void => {
       if (accs.length === 0) confirmDisconnect();
       else void checkConnection();
@@ -441,26 +449,39 @@ export default function CapsulesPage() {
     };
   }, [mounted, checkConnection, confirmDisconnect]);
 
+  // ── Fetch Capsules ─────────────────────────────────────────────────────────
   const fetchCapsules = useCallback(
     async (isSilent = false): Promise<void> => {
       const _p = providerRef.current;
       const _addr = addressRef.current;
       if (!_p || !_addr) return;
+
       if (!isSilent) setIsLoadingData(true);
       else setIsBackgroundLoading(true);
       setFetchError(null);
+
       try {
         const contract = new Contract(CONTRACT_ADDRESS, contractAbi, _p);
         const sent: Capsule[] = [];
         const received: Capsule[] = [];
 
+        // ── Gifts ────────────────────────────────────────────────────────────
         try {
           const totalGifts = Number(await contract.giftCounter());
           for (let i = totalGifts; i >= 1; i -= BATCH_SIZE) {
-            const batch = Array.from({ length: Math.min(BATCH_SIZE, i) }, (_, j) => {
-              const gid = i - j;
-              return contract.gifts(gid).then((g: unknown) => ({ gid, data: g })).catch(() => null);
-            });
+            const batch = Array.from(
+              { length: Math.min(BATCH_SIZE, i) },
+              (_, j) => {
+                const gid = i - j;
+                return contract
+                  .gifts(gid)
+                  .then((g: unknown) => ({ gid, data: g }))
+                  .catch((e: unknown) => {
+                    console.warn(`gifts(${gid}) failed:`, e);
+                    return null;
+                  });
+              }
+            );
             const results = await Promise.all(batch);
             for (const res of results) {
               if (!res) continue;
@@ -471,248 +492,694 @@ export default function CapsulesPage() {
             }
             if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
-        } catch (err) { console.error("Gifts fetch error:", err); }
+        } catch (err) {
+          console.error("Gifts fetch error:", err);
+        }
 
+        // ── Red Packets ───────────────────────────────────────────────────────
         try {
           const totalRPs = Number(await contract.redPacketCounter());
           for (let i = totalRPs; i >= 1; i -= BATCH_SIZE) {
-            const batch = Array.from({ length: Math.min(BATCH_SIZE, i) }, (_, j) => {
-              const rid = i - j;
-              return contract.redPackets(rid).then((rp: unknown) => ({ rid, data: rp })).catch(() => null);
-            });
+            const batch = Array.from(
+              { length: Math.min(BATCH_SIZE, i) },
+              (_, j) => {
+                const rid = i - j;
+                return contract
+                  .redPackets(rid)
+                  .then((rp: unknown) => ({ rid, data: rp }))
+                  .catch((e: unknown) => {
+                    console.warn(`redPackets(${rid}) failed:`, e);
+                    return null;
+                  });
+              }
+            );
             const results = await Promise.all(batch);
             for (const res of results) {
               if (!res) continue;
-              const parsed = parseRedPacket(res.rid, res.data as unknown[], _addr);
+              const parsed = parseRedPacket(
+                res.rid,
+                res.data as unknown[],
+                _addr
+              );
               if (!parsed) continue;
               if (parsed.isMine) sent.push(parsed);
               if (parsed.isForMe) received.push(parsed);
             }
             if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
-        } catch (err) { console.error("RPs fetch error:", err); }
+        } catch (err) {
+          console.error("Red packets fetch error:", err);
+        }
 
-        setMySentCapsules(sent);
-        setMyReceivedCapsules(received);
+        setMySentCapsules([...sent].sort(byIdDesc));
+        setMyReceivedCapsules([...received].sort(byIdDesc));
+        void fetchBalances(_addr, _p);
       } catch (err) {
-        console.error("Fetch capsules failed:", err);
-        setFetchError("Could not update capsules. Please try again.");
+        console.error("fetchCapsules error:", err);
+        setFetchError("Failed to load data. Tap refresh to retry.");
       } finally {
         setIsLoadingData(false);
         setIsBackgroundLoading(false);
       }
     },
-    []
+    [fetchBalances]
   );
 
+  // ── Poll ───────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isConnected && address) {
-      void fetchCapsules(false);
-      const intv = setInterval(() => void fetchCapsules(true), POLL_INTERVAL_MS);
-      return () => clearInterval(intv);
-    }
-  }, [isConnected, address, fetchCapsules]);
+    if (!provider || !address) return;
+    void fetchCapsules();
+    const iv = setInterval(() => void fetchCapsules(true), POLL_INTERVAL_MS);
+    return () => clearInterval(iv);
+  }, [provider, address, fetchCapsules]);
 
-  
-  const handleClaim = async (): Promise<void> => {
+  // ── Unlock Timers ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    const scheduleUnlock = (
+      caps: Capsule[],
+      setter: React.Dispatch<React.SetStateAction<Capsule[]>>
+    ): void => {
+      caps.forEach((c) => {
+        if (!c?.unlockDate || c.isUnlocked || c.isWithdrawn) return;
+        try {
+          const unlockMs =
+            c.unlockDate instanceof Date
+              ? c.unlockDate.getTime()
+              : new Date(c.unlockDate).getTime();
+          const ms = unlockMs - Date.now();
+          if (ms > 0 && ms < 86_400_000) {
+            timers.push(
+              setTimeout(() => {
+                setter((prev) =>
+                  prev.map((x) =>
+                    x?.id === c.id
+                      ? { ...x, isUnlocked: true, message: x.realMessage || "" }
+                      : x
+                  )
+                );
+              }, ms + 1000)
+            );
+          }
+        } catch {
+          // ignore
+        }
+      });
+    };
+
+    scheduleUnlock(myReceivedCapsules, setMyReceivedCapsules);
+    scheduleUnlock(mySentCapsules, setMySentCapsules);
+    return () => timers.forEach(clearTimeout);
+  }, [myReceivedCapsules, mySentCapsules]);
+
+  // ── Claim ──────────────────────────────────────────────────────────────────
+  const handleClaim = useCallback(async (): Promise<void> => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
+    const giftIdNum = parseInt(
+      selectedCapsule.id.replace("gift-", ""),
+      10
+    );
+    if (isNaN(giftIdNum) || giftIdNum <= 0) {
+      alert("Invalid gift ID");
+      return;
+    }
+
     setIsClaiming(true);
     setPendingTxHash(null);
+
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
-      const giftId = selectedCapsule.id.split("-")[1];
-      const tx = await contract.claimGift(giftId);
+
+      // Pre-flight check
+      try {
+        const g = (await contract.gifts(giftIdNum)) as unknown[];
+        if (!g || isZeroAddress(g[0])) {
+          alert("Gift does not exist");
+          return;
+        }
+        if (Boolean(g[5])) {
+          alert("Already claimed");
+          setMyReceivedCapsules((p) =>
+            p.map((c) =>
+              c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
+            )
+          );
+          setSelectedCapsule(null);
+          return;
+        }
+      } catch {
+        // Pre-flight is best-effort; proceed
+      }
+
+      // Encode + append builder code
+      const encoded = contract.interface.encodeFunctionData("withdrawGift", [
+        BigInt(giftIdNum),
+      ]);
+      const dataWithCode = appendBuilderCode(encoded);
+
+      const tx = await signer.sendTransaction({
+        to: CONTRACT_ADDRESS,
+        data: dataWithCode,
+      });
       setPendingTxHash(tx.hash);
-      const receipt = await tx.wait();
+
+      // Poll for receipt
+      const txProvider = (signer as any).provider ?? provider;
+      let receipt: Awaited<ReturnType<BrowserProvider["getTransactionReceipt"]>> | null = null;
+
+      for (let i = 0; i < TX_POLL_RETRIES; i++) {
+        await delay(TX_POLL_DELAY_MS);
+        try {
+          if (txProvider) {
+            receipt = await txProvider.getTransactionReceipt(tx.hash);
+            if (receipt) break;
+          }
+        } catch {
+          // retry
+        }
+      }
 
       if (receipt?.status === 1) {
         setMyReceivedCapsules((p) =>
-          p.map((c) => (c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c))
+          p.map((c) =>
+            c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
+          )
         );
         setSuccessModalData({
           amount: selectedCapsule.amount,
           token: selectedCapsule.token,
         });
         setSelectedCapsule(null);
-        
-        
-        await delay(4000);
         void fetchCapsules(true);
+      } else if (receipt?.status === 0) {
+        alert("Transaction failed on-chain.");
+      } else {
+        alert("Still processing — check your wallet and refresh.");
+        setSelectedCapsule(null);
       }
-    } catch (e) {
-      console.error("Claim error:", e);
+    } catch (err: unknown) {
+      console.error("handleClaim error:", err);
+      const ethErr = err as { code?: string; message?: string; reason?: string };
+      if (ethErr?.code === "ACTION_REJECTED") {
+        alert("Transaction rejected.");
+      } else if (ethErr?.message?.includes("AlreadyWithdrawn")) {
+        alert("Already claimed.");
+        setMyReceivedCapsules((p) =>
+          p.map((c) =>
+            c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
+          )
+        );
+      } else {
+        alert(
+          "Claim failed: " +
+            (ethErr?.reason ?? ethErr?.message ?? "Unknown error")
+        );
+      }
     } finally {
       setIsClaiming(false);
+      setPendingTxHash(null);
     }
-  };
+  }, [selectedCapsule, signer, provider, fetchCapsules]);
 
-  if (!mounted) return null;
+  // ── Copy Address ───────────────────────────────────────────────────────────
+  const handleCopy = useCallback(async (): Promise<void> => {
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard access denied
+    }
+  }, [address]);
 
-  const filtered = (activeTab === "received" ? myReceivedCapsules : mySentCapsules).filter(
-    (c) => filter === "all" || c.token === filter
+  // ── Derived Lists ──────────────────────────────────────────────────────────
+  const sentList = mySentCapsules.filter(
+    (c) => c && (filter === "all" || c.token === filter)
+  );
+  const receivedList = myReceivedCapsules.filter(
+    (c) => c && (filter === "all" || c.token === filter)
   );
 
+  // ── Early return ───────────────────────────────────────────────────────────
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-background pb-24 font-sans text-foreground">
-      <Header isConnected={isConnected} address={address} onDisconnect={() => setShowDisconnectAlert(true)} />
+    <div className="min-h-screen bg-background pb-20 relative font-sans text-foreground">
+      <Header
+        isConnected={isConnected}
+        address={address}
+        onConnect={handleConnect}
+        onDisconnect={() => setShowDisconnectAlert(true)}
+      />
 
       <main className="mx-auto max-w-[480px] px-6 py-8">
-        {isConnected ? (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-            <div className="flex items-center justify-between rounded-3xl bg-card p-6 shadow-sm border border-border/50">
-              <div className="flex items-center gap-4">
-                
-                <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm flex items-center justify-center">
+        {!isConnected ? (
+          <NotConnectedState onConnect={handleConnect} />
+        ) : (
+          <>
+            {/* ── Profile Card ────────────────────────────────────────────── */}
+            <div className="mb-8 rounded-3xl bg-secondary p-6">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm">
                   {avatar ? (
-                    <img src={avatar} alt="avatar" className="h-full w-full object-cover" />
+                    <img
+                      src={avatar}
+                      alt="avatar"
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center bg-blue-100">
-                       <span className="text-xl font-black text-primary uppercase">{basename ? basename.substring(0,1) : <User className="h-6 w-6" />}</span>
+                      <User className="h-6 w-6 text-primary" />
                     </div>
                   )}
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold">{basename || "Base User"}</h3>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
-                    <span>{shortAddress(address)}</span>
-                    <button onClick={() => { navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
-                      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-                    </button>
-                  </div>
+                  <h3 className="text-lg font-bold">
+                    {basename || "Base User"}
+                  </h3>
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    {shortAddress(address)}
+                    {copied ? (
+                      <Check className="h-3 w-3 text-green-600" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Balances */}
+              <div className="flex flex-col gap-3 rounded-2xl bg-background p-4 shadow-sm">
+                <span className="text-sm font-bold text-muted-foreground">
+                  Wallet Balances
+                </span>
+                <div className="flex justify-between items-center border-b border-border pb-2">
+                  <span className="text-xl font-black">{ethBalance}</span>
+                  <span className="text-sm font-bold bg-secondary px-3 py-1 rounded-full">
+                    ETH
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-xl font-black text-blue-600">
+                    {usdcBalance}
+                  </span>
+                  <span className="text-sm font-bold bg-blue-50 px-3 py-1 rounded-full text-blue-600">
+                    USDC
+                  </span>
                 </div>
               </div>
             </div>
-          </motion.div>
-        ) : (
-          <NotConnectedState onConnect={handleConnect} />
-        )}
 
-        {isConnected && (
-          <div className="space-y-6">
-            <div className="flex rounded-2xl bg-secondary p-1 border border-border/50">
-              {(["received", "sent"] as TabType[]).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setActiveTab(t)}
-                  className={cn(
-                    "flex-1 rounded-xl py-2.5 text-sm font-bold transition-all duration-200 capitalize",
-                    activeTab === t ? "bg-white text-black shadow-sm" : "text-muted-foreground"
-                  )}
+            {/* ── Error Banner ─────────────────────────────────────────────── */}
+            {fetchError && (
+              <div className="mb-4 rounded-2xl bg-red-50 border border-red-200 p-4 flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
+                <p className="text-sm text-red-600 font-medium flex-1">
+                  {fetchError}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void fetchCapsules(false)}
+                  className="text-red-600"
                 >
-                  {t}
-                </button>
-              ))}
+                  Retry
+                </Button>
+              </div>
+            )}
+
+            {/* ── Tabs ─────────────────────────────────────────────────────── */}
+            <div className="mb-6 flex rounded-full bg-secondary p-1">
+              <TabButton
+                isActive={activeTab === "received"}
+                onClick={() => setActiveTab("received")}
+                label="Received"
+              />
+              <TabButton
+                isActive={activeTab === "sent"}
+                onClick={() => setActiveTab("sent")}
+                label="Sent"
+              />
             </div>
 
-            <div className="grid gap-4">
-              {isLoadingData ? (
-                <div className="flex flex-col items-center py-20 text-muted-foreground">
-                  <Loader2 className="h-8 w-8 animate-spin mb-4 text-primary/40" />
-                  <p className="text-sm font-bold">Fetching Capsules...</p>
-                </div>
-              ) : filtered.length > 0 ? (
-                filtered.sort(byIdDesc).map((c) => (
-                  <CapsuleCard
-                    key={c.id}
-                    type={activeTab}
-                    amount={c.amount}
-                    token={c.token}
-                    unlockDate={c.unlockDate}
-                    isUnlocked={c.isUnlocked}
-                    isWithdrawn={c.isWithdrawn}
-                    message={c.message}
-                    
-                    sender={
-                      c.isRedPacket 
-                        ? `🧧 Red Packet from ${c.isAnonymous ? "Secret" : shortAddress(c.sender)}` 
-                        : (c.isAnonymous ? "Secret Sender" : shortAddress(c.sender))
-                    }
-                    recipient={shortAddress(c.recipient)}
-                    
-                    onClaim={
-                      activeTab === "received" && c.isUnlocked && !c.isWithdrawn && !c.isRedPacket
-                        ? () => setSelectedCapsule(c)
-                        : undefined
-                    }
-                    onClick={() => setSelectedCapsule(c)}
-                  />
-                ))
-              ) : (
-                <div className="flex flex-col items-center justify-center py-20 text-center opacity-40">
-                  <Inbox className="h-12 w-12 mb-4" />
-                  <p className="font-bold text-lg italic">Empty Box</p>
-                </div>
-              )}
+            {/* ── Filters ──────────────────────────────────────────────────── */}
+            <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+              <FilterChip
+                isActive={filter === "all"}
+                onClick={() => setFilter("all")}
+                label="All"
+              />
+              <FilterChip
+                isActive={filter === "ETH"}
+                onClick={() => setFilter("ETH")}
+                label="ETH"
+              />
+              <FilterChip
+                isActive={filter === "USDC"}
+                onClick={() => setFilter("USDC")}
+                label="USDC"
+              />
             </div>
-          </div>
+
+            {/* ── List Header ───────────────────────────────────────────────── */}
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                {activeTab === "sent" ? "Sent Gifts" : "Inbox"}
+                {isBackgroundLoading && (
+                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                )}
+              </h3>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => void fetchCapsules(false)}
+                disabled={isLoadingData}
+                className="rounded-full hover:bg-secondary"
+              >
+                <RefreshCw
+                  className={cn("h-4 w-4", isLoadingData && "animate-spin")}
+                />
+              </Button>
+            </div>
+
+            {/* ── Capsule Lists ─────────────────────────────────────────────── */}
+            <AnimatePresence mode="wait">
+              {isLoadingData &&
+              sentList.length === 0 &&
+              receivedList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin mb-2" />
+                  <p>Loading on-chain data…</p>
+                </div>
+              ) : activeTab === "sent" ? (
+                <motion.div
+                  key="sent"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-4"
+                >
+                  {sentList.length > 0 ? (
+                    sentList.map((c) => (
+                      <CapsuleCard
+                        key={c.id}
+                        type="sent"
+                        recipient={
+                          c.isRedPacket
+                            ? "Multiple Recipients"
+                            : shortAddress(c.recipient)
+                        }
+                        amount={c.amount}
+                        token={c.token}
+                        unlockDate={c.unlockDate}
+                        isUnlocked={c.isUnlocked}
+                        message={c.message}
+                        txHash={c.txHash}
+                        isWithdrawn={c.isWithdrawn}
+                      />
+                    ))
+                  ) : (
+                    <EmptyState
+                      icon={<Gift />}
+                      title="No gifts sent"
+                      description="Create a new gift to get started."
+                    />
+                  )}
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="received"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-4"
+                >
+                  {receivedList.length > 0 ? (
+                    receivedList.map((c) => (
+                      <CapsuleCard
+                        key={c.id}
+                        type="received"
+                        sender={
+                          c.isRedPacket
+                            ? `🧧 Red Packet from ${
+                                c.isAnonymous
+                                  ? "Secret"
+                                  : shortAddress(c.sender)
+                              }`
+                            : c.isAnonymous
+                            ? "Secret Sender"
+                            : shortAddress(c.sender)
+                        }
+                        amount={c.amount}
+                        token={c.token}
+                        unlockDate={c.unlockDate}
+                        isUnlocked={c.isUnlocked}
+                        isWithdrawn={c.isWithdrawn}
+                        message={c.message}
+                        txHash={c.txHash}
+                        onClaim={
+                          c.isUnlocked && !c.isWithdrawn && !c.isRedPacket
+                            ? () => setSelectedCapsule(c)
+                            : undefined
+                        }
+                        onClick={() => setSelectedCapsule(c)}
+                      />
+                    ))
+                  ) : (
+                    <EmptyState
+                      icon={<Inbox />}
+                      title="Inbox Empty"
+                      description="Share your address to receive gifts."
+                    />
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </>
         )}
       </main>
 
       <BottomNav />
 
+      {/* ── Gift Detail Modal ──────────────────────────────────────────────── */}
       {selectedCapsule && (
         <GiftModal
           isOpen={!!selectedCapsule}
-          onClose={() => { if (!isClaiming) { setSelectedCapsule(null); setPendingTxHash(null); } }}
+          onClose={() => {
+            if (!isClaiming) {
+              setSelectedCapsule(null);
+              setPendingTxHash(null);
+            }
+          }}
           type="detail"
           gift={{
             ...selectedCapsule,
-            sender: selectedCapsule.isRedPacket 
-              ? `🧧 Red Packet from ${selectedCapsule.isAnonymous ? "Secret" : shortAddress(selectedCapsule.sender)}` 
-              : (selectedCapsule.isAnonymous ? "Secret Sender" : shortAddress(selectedCapsule.sender)),
+            sender: selectedCapsule.isRedPacket
+              ? `🧧 Red Packet from ${
+                  selectedCapsule.isAnonymous
+                    ? "Secret"
+                    : shortAddress(selectedCapsule.sender)
+                }`
+              : selectedCapsule.isAnonymous
+              ? "Anonymous"
+              : shortAddress(selectedCapsule.sender),
           }}
-          
-          onClaim={(!selectedCapsule.isWithdrawn && selectedCapsule.isUnlocked && !selectedCapsule.isRedPacket) ? handleClaim : undefined}
+          onClaim={handleClaim}
           isClaiming={isClaiming}
         />
       )}
 
-      {successModalData && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-6">
-          <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-full max-w-sm rounded-[2.5rem] bg-card p-10 text-center border-2 border-primary/20 shadow-2xl">
-            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <PartyPopper className="h-10 w-10" />
-            </div>
-            <h2 className="text-3xl font-black mb-3">Claimed!</h2>
-            <p className="text-muted-foreground mb-8 font-medium">Successfully withdrawn {successModalData.amount} {successModalData.token}.</p>
-            <Button onClick={() => setSuccessModalData(null)} className="w-full h-14 rounded-2xl font-black text-lg">Awesome!</Button>
-          </motion.div>
-        </div>
-      )}
+      {/* ── Success Modal ──────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {successModalData && (
+          <SuccessModal
+            isOpen
+            onClose={() => setSuccessModalData(null)}
+            amount={successModalData.amount}
+            token={successModalData.token}
+          />
+        )}
+      </AnimatePresence>
 
-      <DisconnectModal isOpen={showDisconnectAlert} onClose={() => setShowDisconnectAlert(false)} onConfirm={confirmDisconnect} />
+      {/* ── Disconnect Confirm ─────────────────────────────────────────────── */}
+      <DisconnectModal
+        isOpen={showDisconnectAlert}
+        onClose={() => setShowDisconnectAlert(false)}
+        onConfirm={confirmDisconnect}
+      />
     </div>
   );
 }
 
-function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+interface FilterChipProps {
+  isActive: boolean;
+  onClick: () => void;
+  label: string;
+}
+function FilterChip({ isActive, onClick, label }: FilterChipProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "rounded-full px-4 py-2 text-xs font-bold transition-colors border",
+        isActive
+          ? "bg-blue-600 border-blue-600 text-white shadow-md"
+          : "bg-white border-gray-200 text-black hover:bg-gray-100"
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+interface TabButtonProps {
+  isActive: boolean;
+  onClick: () => void;
+  label: string;
+}
+function TabButton({ isActive, onClick, label }: TabButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex-1 rounded-full py-2.5 text-sm font-bold transition-all duration-200",
+        isActive
+          ? "bg-white text-black shadow-sm"
+          : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+interface EmptyStateProps {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}
+function EmptyState({ icon, title, description }: EmptyStateProps) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 rounded-3xl border border-dashed border-border bg-secondary/30">
+      <div className="mb-4 text-muted-foreground/50 text-4xl">{icon}</div>
+      <h4 className="font-bold">{title}</h4>
+      <p className="text-sm text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+interface SuccessModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  amount: string;
+  token: string;
+}
+function SuccessModal({ isOpen, onClose, amount, token }: SuccessModalProps) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="w-full max-w-sm rounded-[2rem] bg-white p-8 text-center shadow-2xl dark:bg-card"
+      >
+        <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
+          <PartyPopper className="h-10 w-10 text-blue-600 animate-bounce" />
+        </div>
+        <h2 className="mb-2 text-2xl font-black">Unlocked!</h2>
+        <p className="mb-6 font-medium text-muted-foreground">
+          You just claimed your gift.
+        </p>
+        <div className="mb-8 flex flex-col items-center rounded-2xl bg-secondary py-6">
+          <span className="text-4xl font-black text-blue-600">{amount}</span>
+          <span className="text-sm font-bold text-muted-foreground">{token}</span>
+        </div>
+        <Button
+          onClick={onClose}
+          className="h-14 w-full rounded-full text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          Close
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
+
+interface DisconnectModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+function DisconnectModal({ isOpen, onClose, onConfirm }: DisconnectModalProps) {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-card"
+      >
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
           <AlertCircle className="h-6 w-6" />
         </div>
         <h3 className="mb-2 text-lg font-bold">Disconnect Wallet?</h3>
-        <p className="mb-6 text-sm text-muted-foreground font-medium">You will need to reconnect to view your gifts.</p>
+        <p className="mb-6 text-sm text-muted-foreground">
+          You will need to reconnect to view your gifts.
+        </p>
         <div className="grid grid-cols-2 gap-3">
-          <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">Cancel</Button>
-          <Button onClick={onConfirm} className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white">Disconnect</Button>
+          <Button
+            onClick={onClose}
+            variant="secondary"
+            className="rounded-xl font-bold"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={onConfirm}
+            className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white"
+          >
+            Disconnect
+          </Button>
         </div>
       </motion.div>
     </div>
   );
 }
 
-function NotConnectedState({ onConnect }: { onConnect: () => void }) {
+interface NotConnectedStateProps {
+  onConnect: () => void;
+}
+function NotConnectedState({ onConnect }: NotConnectedStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-24 text-center">
       <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
         <Wallet className="h-10 w-10 text-primary" />
       </div>
-      <h2 className="text-2xl font-black mb-2 tracking-tight">Connect Wallet</h2>
-      <p className="text-muted-foreground mb-8 max-w-[240px] font-medium text-sm">Connect your wallet to see your received and sent capsules.</p>
-      <Button onClick={onConnect} className="rounded-full px-10 h-14 font-black text-lg shadow-xl shadow-primary/20 hover:scale-105 active:scale-95 transition-all">Connect Now</Button>
+      <h2 className="text-2xl font-black mb-2">Connect Wallet</h2>
+      <p className="text-muted-foreground mb-8 max-w-[200px]">
+        Connect to view your gifts.
+      </p>
+      <Button
+        onClick={onConnect}
+        className="h-12 w-full max-w-[200px] rounded-full text-base font-bold shadow-none"
+      >
+        Connect
+      </Button>
     </div>
   );
 }
