@@ -8,7 +8,7 @@ import { GiftModal } from "@/components/gift-modal";
 import { Button } from "@/components/ui/button";
 import { Clipboard, Loader2, AlertTriangle, User, UserX, AlertCircle, Gift, Copy, Share2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress } from "ethers";
+import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress, JsonRpcProvider } from "ethers";
 import { motion, AnimatePresence } from "framer-motion";
 import contractAbi from "@/contractAbi.json";
 import { appendBuilderCode } from "@/lib/builderCode";
@@ -85,11 +85,12 @@ function useEvmWallet() {
   useEffect(() => {
     if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
     if (window.ethereum) {
-      window.ethereum.on("accountsChanged", (accs: string[]) => {
+      const eth: any = window.ethereum;
+      eth.on("accountsChanged", (accs: string[]) => {
         if (accs.length === 0) confirmDisconnect();
         else checkConnection();
       });
-      window.ethereum.on("chainChanged", () => setTimeout(checkConnection, 1000));
+      eth.on("chainChanged", () => setTimeout(checkConnection, 1000));
     }
   }, [checkConnection, confirmDisconnect]);
 
@@ -204,19 +205,43 @@ export default function CreatePage() {
     } else { setNeedsApproval(false); }
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
+  // Basename (.base.eth) 
   const handleRecipientChange = async (val: string) => {
-    const safeVal = String(val || "");
+    const safeVal = String(val || "").trim();
     setRecipientInput(safeVal);
     setErrors(prev => ({ ...prev, recipient: "" }));
+
     if (!safeVal) { setResolvedAddress(""); return; }
-    if (ethers.isAddress(safeVal)) { setResolvedAddress(safeVal); return; }
-    if (safeVal.indexOf(".") !== -1) {
+    
+    
+    if (ethers.isAddress(safeVal)) { 
+        setResolvedAddress(safeVal); 
+        return; 
+    }
+
+   
+    if (safeVal.includes(".")) {
       setIsResolving(true);
       try {
-        const mainnetProvider = ethers.getDefaultProvider("mainnet");
+        
+        const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
         const resolved = await mainnetProvider.resolveName(safeVal);
-        if (resolved) { setResolvedAddress(resolved); } else { setResolvedAddress(""); }
-      } catch { setResolvedAddress(""); } finally { setIsResolving(false); }
+        
+        if (resolved) { 
+          setResolvedAddress(resolved); 
+        } else { 
+          
+          const baseProvider = new JsonRpcProvider("https://mainnet.base.org");
+          const baseResolved = await baseProvider.resolveName(safeVal);
+          if (baseResolved) setResolvedAddress(baseResolved);
+          else setResolvedAddress(""); 
+        }
+      } catch (e) { 
+        console.error("Resolution failed", e);
+        setResolvedAddress(""); 
+      } finally { 
+        setIsResolving(false); 
+      }
     } else {
       setResolvedAddress("");
     }
@@ -293,7 +318,6 @@ export default function CreatePage() {
       const metadata = { content: message || "", isAnonymous: isAnonymous };
       const obfuscatedMessage = btoa(JSON.stringify(metadata));
 
-      // ── USDC Approve with Builder Code ──────────────────────────
       if (selectedToken === "USDC") {
         if (usdcAllowance < amountWei) {
           setLoadingStep("APPROVING");
@@ -321,7 +345,6 @@ export default function CreatePage() {
         const maxClaimersBigInt = BigInt(Math.floor(Number(maxClaimers)));
         const isLucky = distributionType === "LUCKY";
 
-        // ── Red Packet with Builder Code ────────────────────────
         const rpEncodedData = giftContract.interface.encodeFunctionData(
           "createRedPacket",
           [
@@ -345,7 +368,6 @@ export default function CreatePage() {
         const rpReceipt = await tx.wait();
         let newPacketId = "";
 
-        // ✅ Fix: rpReceipt null check + logs as Array<any>
         if (rpReceipt) {
           const allLogs = Array.from(rpReceipt.logs) as Array<any>;
           for (const log of allLogs) {
@@ -371,7 +393,6 @@ export default function CreatePage() {
         const assetType = selectedToken === "ETH" ? 0 : 1;
         const tokenId = 0;
 
-        // ── Create Gift with Builder Code ───────────────────────
         const giftEncodedData = giftContract.interface.encodeFunctionData(
           "createGift",
           [
@@ -393,7 +414,6 @@ export default function CreatePage() {
           value: valueArg,
         });
 
-        // ✅ Fix: giftReceipt null check
         const giftReceipt = await tx.wait();
         if (giftReceipt && giftReceipt.status === 1) {
           setSuccessData({
@@ -435,16 +455,8 @@ export default function CreatePage() {
       }
 
       const safeErrorMsg = String(errorMsg).toLowerCase();
-
-      if (safeErrorMsg.indexOf("network error") !== -1 || safeErrorMsg.indexOf("fetch payload") !== -1) {
-        errorMsg = `RPC/Network Error: RPC connection failed or Gas estimation failed. Details: ${errorMsg}`;
-      } else if (safeErrorMsg.indexOf("insufficient funds") !== -1 || safeErrorMsg.indexOf("gas required exceeds allowance") !== -1) {
-        errorMsg = "Not enough ETH to pay for transaction amount + gas fees on Base.";
-      } else if (safeErrorMsg.indexOf("transfer amount exceeds balance") !== -1) {
-        errorMsg = "Your USDC balance is too low.";
-      } else if (safeErrorMsg.indexOf("require") !== -1 || safeErrorMsg.indexOf("reverted") !== -1) {
-        errorMsg = "Contract Revert: " + safeErrorMsg;
-      }
+      if (safeErrorMsg.indexOf("network error") !== -1) errorMsg = "RPC/Network Error.";
+      else if (safeErrorMsg.indexOf("insufficient funds") !== -1) errorMsg = "Not enough ETH for gas.";
 
       setErrors({ submit: errorMsg });
     }
@@ -569,7 +581,7 @@ export default function CreatePage() {
                 </button>
               </div>
               {isResolving && <p className="ml-2 text-xs font-medium text-muted-foreground">Resolving domain...</p>}
-              {resolvedAddress && resolvedAddress !== recipientInput && (
+              {resolvedAddress && resolvedAddress.toLowerCase() !== recipientInput.toLowerCase() && (
                 <p className="ml-2 text-xs font-bold text-green-600">
                   ✓ {resolvedAddress.substring(0, 6)}...{resolvedAddress.substring(resolvedAddress.length - 4)}
                 </p>
