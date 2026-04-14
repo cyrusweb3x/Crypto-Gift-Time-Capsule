@@ -1,22 +1,22 @@
 import type { Metadata } from "next";
 
-export async function generateMetadata({
-  params,
-}: {
+type Props = {
   params: { id: string };
-}): Promise<Metadata> {
+};
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const baseUrl = "https://www.basecapsule.space";
   const ogImage = `${baseUrl}/og-image.png`;
+  const packetUrl = `${baseUrl}/packet/${params.id}`;
 
   return {
-    title: "🧧 You've received a Red Packet! — Base Capsule",
-    description:
-      "Someone sent you a time-locked crypto Red Packet on Base. Open it now!",
+    metadataBase: new URL(baseUrl),
+    title: "🧧 You received a Red Packet! — Base Capsule",
+    description: "Someone sent you a crypto Red Packet on Base. Open it now!",
     openGraph: {
-      title: "🧧 You've received a Red Packet!",
-      description:
-        "Someone sent you a crypto gift on Base Capsule. Tap to claim your share!",
-      url: `${baseUrl}/packet/${params.id}`,
+      title: "🧧 You received a Red Packet!",
+      description: "Someone sent you a crypto gift on Base Capsule. Tap to claim your share!",
+      url: packetUrl,
       siteName: "Base Capsule",
       images: [
         {
@@ -30,17 +30,9 @@ export async function generateMetadata({
     },
     twitter: {
       card: "summary_large_image",
-      title: "🧧 You've received a Red Packet!",
-      description:
-        "Someone sent you a crypto gift on Base Capsule. Tap to claim your share!",
+      title: "🧧 You received a Red Packet!",
+      description: "Someone sent you a crypto gift on Base Capsule. Tap to claim your share!",
       images: [ogImage],
-    },
-    other: {
-      // Farcaster / Warpcast frame meta
-      "fc:frame": "vNext",
-      "fc:frame:image": ogImage,
-      "fc:frame:button:1": "🧧 Claim Red Packet",
-      "fc:frame:post_url": `${baseUrl}/packet/${params.id}`,
     },
   };
 }

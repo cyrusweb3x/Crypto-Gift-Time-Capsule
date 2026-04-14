@@ -1,11 +1,21 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
-    // TypeScript errors will be ignored during build
     ignoreBuildErrors: true,
+  },
+  async headers() {
+    return [
+      {
+        source: "/packet/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "no-store, must-revalidate",
+          },
+        ],
+      },
+    ];
   },
 };
 
 export default nextConfig;
-
-
