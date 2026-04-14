@@ -190,38 +190,40 @@ const publicClient = createPublicClient({
   transport: http("https://mainnet.base.org"),
 });
 
-const L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
-
-const RESOLVER_ABI = [
-  {
-    name: "name",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "node", type: "bytes32" }],
-    outputs: [{ name: "", type: "string" }],
-  },
-  {
-    name: "text",
-    type: "function",
-    stateMutability: "view",
-    inputs: [
-      { name: "node", type: "bytes32" },
-      { name: "key", type: "string" },
-    ],
-    outputs: [{ name: "", type: "string" }],
-  },
-] as const;
-
-// Resolve a single address → basename (e.g. "cyrusweb3x.base.eth")
 const resolveBasename = async (address: string): Promise<string | null> => {
+  // Method 1: Coinbase API (fastest, most reliable)
+  try {
+    const res = await fetch(
+      `https://api.wallet.coinbase.com/rpc/v3/fw/names?addresses=${address.toLowerCase()}&chainId=8453`
+    );
+    if (res.ok) {
+      const data = await res.json() as {
+        names?: Array<{ name: string; address: string }>;
+      };
+      const found = data.names?.find(
+        (n) => n.address.toLowerCase() === address.toLowerCase()
+      );
+      if (found?.name) return found.name;
+    }
+  } catch { /* fallback */ }
+
+  // Method 2: viem contract call (fallback)
   try {
     const { normalize, namehash } = await import("viem/ens");
     const addressForReverse = address.toLowerCase().replace("0x", "");
     const reverseNode = `${addressForReverse}.addr.reverse`;
 
     const name = await publicClient.readContract({
-      address: L2_RESOLVER,
-      abi: RESOLVER_ABI,
+      address: "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD",
+      abi: [
+        {
+          name: "name",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "node", type: "bytes32" }],
+          outputs: [{ name: "", type: "string" }],
+        },
+      ],
       functionName: "name",
       args: [namehash(normalize(reverseNode))],
     }) as string;
@@ -232,14 +234,36 @@ const resolveBasename = async (address: string): Promise<string | null> => {
   }
 };
 
-// Resolve avatar text record for a basename
 const resolveBasenameAvatar = async (name: string): Promise<string | null> => {
+  // Method 1: Coinbase API
+  try {
+    const res = await fetch(
+      `https://api.wallet.coinbase.com/rpc/v3/fw/avatar?name=${encodeURIComponent(name)}&chainId=8453`
+    );
+    if (res.ok) {
+      const data = await res.json() as { avatar?: string };
+      if (data.avatar) return data.avatar;
+    }
+  } catch { /* fallback */ }
+
+  // Method 2: viem contract call (fallback)
   try {
     const { normalize, namehash } = await import("viem/ens");
 
     const avatar = await publicClient.readContract({
-      address: L2_RESOLVER,
-      abi: RESOLVER_ABI,
+      address: "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD",
+      abi: [
+        {
+          name: "text",
+          type: "function",
+          stateMutability: "view",
+          inputs: [
+            { name: "node", type: "bytes32" },
+            { name: "key", type: "string" },
+          ],
+          outputs: [{ name: "", type: "string" }],
+        },
+      ],
       functionName: "text",
       args: [namehash(normalize(name)), "avatar"],
     }) as string;
@@ -251,7 +275,6 @@ const resolveBasenameAvatar = async (name: string): Promise<string | null> => {
 };
 
 // ─── Identity ─────────────────────────────────────────────────────────────────
-// REPLACED: now uses Base L2 resolver directly via viem
 const safeGetIdentity = async (address: string): Promise<Identity> => {
   try {
     const name = await resolveBasename(address);
@@ -263,7 +286,6 @@ const safeGetIdentity = async (address: string): Promise<Identity> => {
   }
 };
 
-// REPLACED: now uses Base L2 resolver directly via viem
 const resolveIdentities = async (
   addresses: string[]
 ): Promise<Record<string, string | null>> => {
