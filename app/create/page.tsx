@@ -1,4 +1,5 @@
-// create/page.tsx
+// Create/page.tsx 
+
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -32,13 +33,13 @@ const ERC20_ABI = [
   "function symbol() view returns (string)"
 ];
 
-// Base L2 resolver setup
 const basePublicClient = createPublicClient({
   chain: base,
   transport: http("https://mainnet.base.org"),
 });
 
-const BASE_L2_RESOLVER_ADDR = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
+const BASE_REVERSE_REGISTRAR = "0x79EA96012eEa67A83431F1701B3dFf7e37F9E282" as const;
+const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
 
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
@@ -216,14 +217,15 @@ export default function CreatePage() {
     } else { setNeedsApproval(false); }
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
-  // Username/Address Resolution via Base L2 Resolver
   const resolveUsername = async (name: string): Promise<string | null> => {
+    // Method 1: Base L2 Resolver — forward resolution (name → address)
+    // username.base.eth এর জন্য namehash দিয়ে node বানিয়ে addr call করি
     try {
       const { normalize, namehash } = await import("viem/ens");
       const node = namehash(normalize(name));
 
       const resolved = await basePublicClient.readContract({
-        address: BASE_L2_RESOLVER_ADDR,
+        address: BASE_L2_RESOLVER,
         abi: [
           {
             name: "addr",
@@ -242,6 +244,15 @@ export default function CreatePage() {
       }
     } catch { /* fallback */ }
 
+    // Method 2: OnchainKit (backup)
+    try {
+      const { getAddress } = await import("@coinbase/onchainkit/identity");
+      const { base } = await import("viem/chains");
+      const resolved = await getAddress({ name, chain: base });
+      if (resolved) return resolved;
+    } catch { /* fallback */ }
+
+    // Method 3: ENS mainnet (last resort)
     try {
       const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
       const resolved = await mainnetProvider.resolveName(name);
