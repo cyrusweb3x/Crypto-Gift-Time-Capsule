@@ -29,6 +29,7 @@ import {
   formatEther,
 } from "ethers";
 import contractAbi from "@/contractAbi.json";
+import type {} from "@coinbase/onchainkit/identity";
 import { appendBuilderCode } from "@/lib/builderCode";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
