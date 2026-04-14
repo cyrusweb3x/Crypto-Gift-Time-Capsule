@@ -218,32 +218,68 @@ export default function CreatePage() {
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
   const resolveUsername = async (name: string): Promise<string | null> => {
-  // Method 1: viem getEnsAddress — Base L2 resolver দিয়ে
   try {
-    const { normalize } = await import("viem/ens");
-    const resolved = await basePublicClient.getEnsAddress({
-      name: normalize(name),
-      universalResolverAddress: "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD",
-    });
+    const { normalize, namehash } = await import("viem/ens");
+
+    const node = namehash(normalize(name));
+
+    const registryAddress = "0xB94704422c2a1E396835A571837Aa5AE53285a95";
+
+    const resolverAddress = await basePublicClient.readContract({
+      address: registryAddress as `0x${string}`,
+      abi: [
+        {
+          name: "resolver",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "node", type: "bytes32" }],
+          outputs: [{ name: "", type: "address" }],
+        },
+      ],
+      functionName: "resolver",
+      args: [node],
+    }) as string;
+
+    if (!resolverAddress || resolverAddress === "0x0000000000000000000000000000000000000000") {
+      return null;
+    }
+
+    const resolved = await basePublicClient.readContract({
+      address: resolverAddress as `0x${string}`,
+      abi: [
+        {
+          name: "addr",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "node", type: "bytes32" }],
+          outputs: [{ name: "", type: "address" }],
+        },
+      ],
+      functionName: "addr",
+      args: [node],
+    }) as string;
+
     if (resolved && resolved !== "0x0000000000000000000000000000000000000000") {
       return resolved;
     }
-  } catch { /* fallback */ }
+  } catch (err) {
+    console.error("Base username resolution failed:", err);
+  }
 
-  // Method 2: OnchainKit
+  // Fallback 1: OnchainKit
   try {
     const { getAddress } = await import("@coinbase/onchainkit/identity");
     const { base } = await import("viem/chains");
     const resolved = await getAddress({ name, chain: base });
     if (resolved) return resolved;
-  } catch { /* fallback */ }
+  } catch {}
 
-  // Method 3: ENS mainnet last resort
+  // Fallback 2: ENS mainnet
   try {
     const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
     const resolved = await mainnetProvider.resolveName(name);
     if (resolved) return resolved;
-  } catch { /* ignore */ }
+  } catch {}
 
   return null;
 };
