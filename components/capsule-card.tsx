@@ -1,3 +1,4 @@
+// components/capsule-card.tsx
 "use client";
 
 import React, { useState, useEffect } from "react";
@@ -21,6 +22,7 @@ interface CapsuleCardProps {
   onClaim?: () => void;
   onClick?: () => void;
   giftType?: "single" | "redpacket";
+  rpClaimLabel?: string; // ← NEW: "3/10 Claimed" or "✅ All Claimed"
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ export function CapsuleCard({
   onClaim,
   onClick,
   giftType = "single",
+  rpClaimLabel,
 }: CapsuleCardProps) {
   const [timeLeft, setTimeLeft] = useState("");
   const safeDateObj = toSafeDate(unlockDate);
@@ -77,9 +80,9 @@ export function CapsuleCard({
         const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
         const seconds = Math.floor((diff % (1000 * 60)) / 1000);
 
-        if (days > 0)        setTimeLeft(`${days}d ${hours}h left`);
-        else if (hours > 0)  setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
-        else                 setTimeLeft(`${minutes}m ${seconds}s`);
+        if (days > 0)       setTimeLeft(`${days}d ${hours}h left`);
+        else if (hours > 0) setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
+        else                setTimeLeft(`${minutes}m ${seconds}s`);
       } catch {
         setTimeLeft("--");
       }
@@ -96,8 +99,10 @@ export function CapsuleCard({
     catch { return "--"; }
   })();
 
-  const hasMessage = typeof message === "string" && message.trim() !== "";
-  const hasTxHash  = typeof txHash  === "string" && txHash.trim()  !== "";
+  const hasMessage    = typeof message === "string" && message.trim() !== "";
+  const hasTxHash     = typeof txHash  === "string" && txHash.trim()  !== "";
+  const isRedPacket   = giftType === "redpacket";
+  const allClaimed    = rpClaimLabel?.startsWith("✅");
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -110,9 +115,20 @@ export function CapsuleCard({
       {/* ── Top Row: Address & Status ──────────────────────────────────── */}
       <div className="mb-3 flex items-start justify-between">
         <div className="flex flex-col overflow-hidden">
-          <span className="text-[10px] uppercase text-muted-foreground">
-            {giftType === "redpacket" ? "🧧 Red Packet" : (type === "sent" ? "To:" : "From:")}
-          </span>
+          {/* Label row — gift type + direction */}
+          <div className="flex items-center gap-1.5 mb-0.5">
+            {isRedPacket && (
+              <span className="text-[10px] font-semibold text-orange-500 bg-orange-50 border border-orange-200 rounded-full px-1.5 py-0.5 leading-none">
+                🧧 Red Packet
+              </span>
+            )}
+            <span className="text-[10px] uppercase text-muted-foreground">
+              {isRedPacket
+                ? (type === "sent" ? "Created by you" : "From:")
+                : (type === "sent" ? "To:" : "From:")}
+            </span>
+          </div>
+
           <span className="truncate text-sm font-semibold text-foreground max-w-[180px]">
             {type === "sent" ? recipient : sender}
           </span>
@@ -130,11 +146,11 @@ export function CapsuleCard({
           )}
         >
           {isWithdrawn ? (
-            <>Claimed <CheckCircle2 className="h-3 w-3" /></>
+            <><span>Claimed</span> <CheckCircle2 className="h-3 w-3" /></>
           ) : isUnlocked ? (
-            <>Unlocked <Unlock className="h-3 w-3" /></>
+            <><span>Unlocked</span> <Unlock className="h-3 w-3" /></>
           ) : (
-            <>Locked <Lock className="h-3 w-3" /></>
+            <><span>Locked</span> <Lock className="h-3 w-3" /></>
           )}
         </div>
       </div>
@@ -161,6 +177,32 @@ export function CapsuleCard({
           </h4>
         </div>
       </div>
+
+      {/* ── Red Packet Claim Stats (sent view only) ────────────────────── */}
+      {isRedPacket && rpClaimLabel && type === "sent" && (
+        <div
+          className={cn(
+            "mb-3 flex items-center gap-2 rounded-xl px-3 py-2 border",
+            allClaimed
+              ? "bg-green-50 border-green-200"
+              : "bg-blue-50 border-blue-200"
+          )}
+        >
+          <span
+            className={cn(
+              "text-xs font-bold",
+              allClaimed ? "text-green-700" : "text-blue-700"
+            )}
+          >
+            {rpClaimLabel}
+          </span>
+          {!allClaimed && (
+            <span className="text-[10px] text-blue-500 ml-auto">
+              Red Packet Claims
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── Message ───────────────────────────────────────────────────── */}
       {hasMessage && (
