@@ -30,6 +30,8 @@ import {
 } from "ethers";
 import contractAbi from "@/contractAbi.json";
 import { appendBuilderCode } from "@/lib/builderCode";
+import { createPublicClient, http } from "viem";
+import { base } from "viem/chains";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
@@ -57,7 +59,7 @@ interface ParsedMessage {
 interface Capsule {
   id: string;
   numericId: number;
-  createdAt: number;        // used for time-based mixed sort
+  createdAt: number;
   sender: string;
   recipient: string;
   amount: string;
@@ -76,7 +78,6 @@ interface Capsule {
   senderName?: string | null;
   recipientName?: string | null;
   hasClaimedRedPacket?: boolean;
-  // Red packet claim stats
   rpTotalShares?: number;
   rpRemainingShares?: number;
   rpClaimedShares?: number;
@@ -179,31 +180,89 @@ const safeUnlockDate = (unlockTime: number): Date => {
 const delay = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
-// Sort by createdAt descending — gifts + red packets mixed by time
 const byCreatedAtDesc = (a: Capsule, b: Capsule): number =>
   b.createdAt - a.createdAt;
 
-// ─── Identity ─────────────────────────────────────────────────────────────────
-const safeGetIdentity = async (address: string): Promise<Identity> => {
+// ─── Base L2 Resolver (viem) ──────────────────────────────────────────────────
+const publicClient = createPublicClient({
+  chain: base,
+  transport: http("https://mainnet.base.org"),
+});
+
+const L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
+
+const RESOLVER_ABI = [
+  {
+    name: "name",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "node", type: "bytes32" }],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    name: "text",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "node", type: "bytes32" },
+      { name: "key", type: "string" },
+    ],
+    outputs: [{ name: "", type: "string" }],
+  },
+] as const;
+
+// Resolve a single address → basename (e.g. "cyrusweb3x.base.eth")
+const resolveBasename = async (address: string): Promise<string | null> => {
   try {
-    const { getName, getAvatar } = await import("@coinbase/onchainkit/identity");
-    const { base } = await import("viem/chains");
-    const name = await getName({
-      address: address as `0x${string}`,
-      chain: base,
-    });
-    if (name) {
-      const avt = await getAvatar({ ensName: name, chain: base });
-      return { name, avatar: avt ?? null };
-    }
+    const { normalize, namehash } = await import("viem/ens");
+    const addressForReverse = address.toLowerCase().replace("0x", "");
+    const reverseNode = `${addressForReverse}.addr.reverse`;
+
+    const name = await publicClient.readContract({
+      address: L2_RESOLVER,
+      abi: RESOLVER_ABI,
+      functionName: "name",
+      args: [namehash(normalize(reverseNode))],
+    }) as string;
+
+    return name || null;
   } catch {
-    // silently fail — identity is non-critical
+    return null;
   }
-  return { name: null, avatar: null };
 };
 
-// Resolve basenames for a list of addresses
-// Every Base app user has a username (username.base.eth)
+// Resolve avatar text record for a basename
+const resolveBasenameAvatar = async (name: string): Promise<string | null> => {
+  try {
+    const { normalize, namehash } = await import("viem/ens");
+
+    const avatar = await publicClient.readContract({
+      address: L2_RESOLVER,
+      abi: RESOLVER_ABI,
+      functionName: "text",
+      args: [namehash(normalize(name)), "avatar"],
+    }) as string;
+
+    return avatar || null;
+  } catch {
+    return null;
+  }
+};
+
+// ─── Identity ─────────────────────────────────────────────────────────────────
+// REPLACED: now uses Base L2 resolver directly via viem
+const safeGetIdentity = async (address: string): Promise<Identity> => {
+  try {
+    const name = await resolveBasename(address);
+    if (!name) return { name: null, avatar: null };
+    const avatar = await resolveBasenameAvatar(name);
+    return { name, avatar };
+  } catch {
+    return { name: null, avatar: null };
+  }
+};
+
+// REPLACED: now uses Base L2 resolver directly via viem
 const resolveIdentities = async (
   addresses: string[]
 ): Promise<Record<string, string | null>> => {
@@ -214,17 +273,7 @@ const resolveIdentities = async (
 
   await Promise.all(
     unique.map(async (addr) => {
-      try {
-        const { getName } = await import("@coinbase/onchainkit/identity");
-        const { base } = await import("viem/chains");
-        const name = await getName({
-          address: addr as `0x${string}`,
-          chain: base,
-        });
-        results[addr.toLowerCase()] = name ?? null;
-      } catch {
-        results[addr.toLowerCase()] = null;
-      }
+      results[addr.toLowerCase()] = await resolveBasename(addr);
     })
   );
 
@@ -263,7 +312,7 @@ const parseGift = (
     return {
       id: `gift-${id}`,
       numericId: id,
-      createdAt: id, // higher id = newer, used for mixed sort
+      createdAt: id,
       sender,
       recipient,
       amount,
@@ -295,10 +344,6 @@ const parseRedPacket = (
   claimedAmount?: string
 ): Capsule | null => {
   try {
-    // Red packet struct layout:
-    // [0] id  [1] creator  [2] token  [3] totalAmount  [4] remainingAmount
-    // [5] totalShares  [6] remainingShares  [7] unlockTime
-    // [8] expireTime   [9] isAnonymous  [10] isCancelled  [11] message
     const creator = String(rp[1] ?? "");
     const tokenAddr = String(rp[2] ?? "");
     const totalAmt = rp[3] ?? ZERO_BIG;
@@ -307,7 +352,6 @@ const parseRedPacket = (
     const isCancelled = Boolean(rp[10]);
     const rawMsg = String(rp[11] ?? "");
 
-    // Claim stats
     const totalShares = Number(rp[5] ?? 0);
     const remainingShares = Number(rp[6] ?? 0);
     const claimedShares = totalShares - remainingShares;
@@ -387,7 +431,6 @@ export default function CapsulesPage() {
   const [pendingTxHash, setPendingTxHash] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Stable refs so fetchCapsules always reads latest provider/address
   const providerRef = useRef(provider);
   const addressRef = useRef(address);
   useEffect(() => { providerRef.current = provider; }, [provider]);
@@ -525,7 +568,6 @@ export default function CapsulesPage() {
 
       try {
         const contract = new Contract(CONTRACT_ADDRESS, contractAbi, _p);
-        // Single combined arrays — mixed sort at the end
         const sent: Capsule[] = [];
         const received: Capsule[] = [];
         const addressesToResolve: string[] = [];
@@ -555,12 +597,10 @@ export default function CapsulesPage() {
 
               if (parsed.isMine) {
                 sent.push(parsed);
-                // Always resolve recipient username (all Base users have one)
                 if (parsed.recipient) addressesToResolve.push(parsed.recipient);
               }
               if (parsed.isForMe) {
                 received.push(parsed);
-                // Always resolve sender username
                 if (parsed.sender) addressesToResolve.push(parsed.sender);
               }
             }
@@ -596,12 +636,10 @@ export default function CapsulesPage() {
               const me = _addr.toLowerCase();
               const isCreator = creator.toLowerCase() === me;
 
-              // Check if this user already claimed from this red packet
               let claimedAmount: string | undefined;
               if (!isCreator) {
                 try {
                   let rawClaimed: bigint | undefined;
-                  // Try multiple common contract method names
                   try {
                     rawClaimed = (await contract.claimedAmounts(res.rid, _addr)) as bigint;
                   } catch {
@@ -633,11 +671,9 @@ export default function CapsulesPage() {
               if (isCreator) {
                 sent.push(parsed);
               } else {
-                // Show in received if user claimed OR unlocked+not cancelled
                 if (claimedAmount || (parsed.isUnlocked && !parsed.isCancelled)) {
                   received.push({ ...parsed, isForMe: true });
                 }
-                // Always resolve creator username
                 if (parsed.sender) addressesToResolve.push(parsed.sender);
               }
             }
@@ -665,7 +701,6 @@ export default function CapsulesPage() {
           });
         }
 
-        // ── Mixed sort by createdAt desc (gifts + red packets together) ────
         setMySentCapsules([...sent].sort(byCreatedAtDesc));
         setMyReceivedCapsules([...received].sort(byCreatedAtDesc));
         void fetchBalances(_addr, _p);
@@ -746,7 +781,6 @@ export default function CapsulesPage() {
     try {
       const contract = new Contract(CONTRACT_ADDRESS, contractAbi, signer);
 
-      // Pre-flight check
       try {
         const g = (await contract.gifts(giftIdNum)) as unknown[];
         if (!g || isZeroAddress(g[0])) {
@@ -794,7 +828,6 @@ export default function CapsulesPage() {
       }
 
       if (receipt?.status === 1) {
-        // Immediately mark as withdrawn so claim button disappears
         setMyReceivedCapsules((p) =>
           p.map((c) =>
             c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
@@ -806,7 +839,6 @@ export default function CapsulesPage() {
         });
         setSelectedCapsule(null);
 
-        // Wait 4s for indexer before refreshing
         await delay(CLAIM_SUCCESS_DELAY_MS);
         void fetchCapsules(true);
       } else if (receipt?.status === 0) {
@@ -860,7 +892,6 @@ export default function CapsulesPage() {
   );
 
   // ── Display Name ───────────────────────────────────────────────────────────
-  // Always prefer username (basename) over wallet address
   const formatDisplayName = (
     capsule: Capsule,
     type: "sent" | "received"
@@ -880,7 +911,7 @@ export default function CapsulesPage() {
   const isClaimable = (c: Capsule): boolean =>
     c.isUnlocked && !c.isWithdrawn && !c.isRedPacket && !c.hasClaimedRedPacket;
 
-  // ── Red packet claim stats label (for sent view) ───────────────────────────
+  // ── Red packet claim stats label ───────────────────────────────────────────
   const rpClaimLabel = (c: Capsule): string | undefined => {
     if (!c.isRedPacket || !c.isMine) return undefined;
     if (!c.rpTotalShares) return undefined;
@@ -1171,7 +1202,6 @@ export default function CapsulesPage() {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-// ⚠️ সম্পূর্ণ original UI রাখা হয়েছে — কিছুই কাটা হয়নি
 
 interface FilterChipProps {
   isActive: boolean;

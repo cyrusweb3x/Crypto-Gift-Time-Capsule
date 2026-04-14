@@ -12,6 +12,8 @@ import { ethers, BrowserProvider, Contract, formatUnits, parseUnits, ZeroAddress
 import { motion, AnimatePresence } from "framer-motion";
 import contractAbi from "@/contractAbi.json";
 import { appendBuilderCode } from "@/lib/builderCode";
+import { createPublicClient, http } from "viem";
+import { base } from "viem/chains";
 
 const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
 const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
