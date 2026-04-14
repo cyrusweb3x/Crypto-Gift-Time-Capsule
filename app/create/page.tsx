@@ -218,49 +218,35 @@ export default function CreatePage() {
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
   const resolveUsername = async (name: string): Promise<string | null> => {
-    // Method 1: Base L2 Resolver — forward resolution (name → address)
-    // username.base.eth এর জন্য namehash দিয়ে node বানিয়ে addr call করি
-    try {
-      const { normalize, namehash } = await import("viem/ens");
-      const node = namehash(normalize(name));
+  // Method 1: viem getEnsAddress — Base L2 resolver দিয়ে
+  try {
+    const { normalize } = await import("viem/ens");
+    const resolved = await basePublicClient.getEnsAddress({
+      name: normalize(name),
+      universalResolverAddress: "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD",
+    });
+    if (resolved && resolved !== "0x0000000000000000000000000000000000000000") {
+      return resolved;
+    }
+  } catch { /* fallback */ }
 
-      const resolved = await basePublicClient.readContract({
-        address: BASE_L2_RESOLVER,
-        abi: [
-          {
-            name: "addr",
-            type: "function",
-            stateMutability: "view",
-            inputs: [{ name: "node", type: "bytes32" }],
-            outputs: [{ name: "", type: "address" }],
-          },
-        ],
-        functionName: "addr",
-        args: [node],
-      }) as string;
+  // Method 2: OnchainKit
+  try {
+    const { getAddress } = await import("@coinbase/onchainkit/identity");
+    const { base } = await import("viem/chains");
+    const resolved = await getAddress({ name, chain: base });
+    if (resolved) return resolved;
+  } catch { /* fallback */ }
 
-      if (resolved && resolved !== "0x0000000000000000000000000000000000000000") {
-        return resolved;
-      }
-    } catch { /* fallback */ }
+  // Method 3: ENS mainnet last resort
+  try {
+    const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
+    const resolved = await mainnetProvider.resolveName(name);
+    if (resolved) return resolved;
+  } catch { /* ignore */ }
 
-    // Method 2: OnchainKit (backup)
-    try {
-      const { getAddress } = await import("@coinbase/onchainkit/identity");
-      const { base } = await import("viem/chains");
-      const resolved = await getAddress({ name, chain: base });
-      if (resolved) return resolved;
-    } catch { /* fallback */ }
-
-    // Method 3: ENS mainnet (last resort)
-    try {
-      const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
-      const resolved = await mainnetProvider.resolveName(name);
-      if (resolved) return resolved;
-    } catch { /* ignore */ }
-
-    return null;
-  };
+  return null;
+};
 
   const handleRecipientChange = async (val: string) => {
     const safeVal = String(val || "").trim();
