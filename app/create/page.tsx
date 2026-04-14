@@ -205,7 +205,42 @@ export default function CreatePage() {
     } else { setNeedsApproval(false); }
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
-  // Basename (.base.eth) 
+  // ─── Username/Address Resolution ─────────────────────────────────────────────
+  const resolveUsername = async (name: string): Promise<string | null> => {
+    try {
+      // Try OnChainKit for Base usernames (cyrusweb3x.base.eth)
+      const { getAddress } = await import("@coinbase/onchainkit/identity");
+      const { base } = await import("viem/chains");
+      const resolved = await getAddress({
+        name: name as string,
+        chain: base,
+      });
+      if (resolved) return resolved;
+    } catch (e) {
+      console.log("OnChainKit resolution failed, trying ENS:", e);
+    }
+    
+    try {
+      // Fallback to ENS resolution via Base provider
+      const baseProvider = new JsonRpcProvider("https://mainnet.base.org");
+      const resolved = await baseProvider.resolveName(name);
+      if (resolved) return resolved;
+    } catch (e) {
+      console.log("Base ENS resolution failed:", e);
+    }
+    
+    try {
+      // Last resort: Mainnet ENS
+      const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
+      const resolved = await mainnetProvider.resolveName(name);
+      if (resolved) return resolved;
+    } catch (e) {
+      console.log("Mainnet ENS resolution failed:", e);
+    }
+    
+    return null;
+  };
+
   const handleRecipientChange = async (val: string) => {
     const safeVal = String(val || "").trim();
     setRecipientInput(safeVal);
@@ -213,28 +248,22 @@ export default function CreatePage() {
 
     if (!safeVal) { setResolvedAddress(""); return; }
     
-    
+    // Direct address input
     if (ethers.isAddress(safeVal)) { 
-        setResolvedAddress(safeVal); 
-        return; 
+      setResolvedAddress(safeVal); 
+      return; 
     }
 
-   
-    if (safeVal.includes(".")) {
+    // Username resolution (.base.eth, .eth, etc.)
+    if ((safeVal as string).includes(".")) {
       setIsResolving(true);
       try {
-        
-        const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
-        const resolved = await mainnetProvider.resolveName(safeVal);
-        
-        if (resolved) { 
-          setResolvedAddress(resolved); 
-        } else { 
-          
-          const baseProvider = new JsonRpcProvider("https://mainnet.base.org");
-          const baseResolved = await baseProvider.resolveName(safeVal);
-          if (baseResolved) setResolvedAddress(baseResolved);
-          else setResolvedAddress(""); 
+        const resolved = await resolveUsername(safeVal);
+        if (resolved) {
+          setResolvedAddress(resolved);
+        } else {
+          setResolvedAddress("");
+          setErrors(prev => ({ ...prev, recipient: "Could not resolve username" }));
         }
       } catch (e) { 
         console.error("Resolution failed", e);
@@ -477,8 +506,34 @@ export default function CreatePage() {
     setMaxClaimers("10");
   };
 
+  // ─── Fixed Paste Handler with better error handling ────────────────────────────
   const handlePaste = async () => {
-    try { const text = await navigator.clipboard.readText(); handleRecipientChange(text); } catch {}
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        console.warn("Clipboard API not available");
+        return;
+      }
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        handleRecipientChange(text);
+      }
+    } catch (err) {
+      console.error("Paste failed:", err);
+      // Fallback: try to use document.execCommand for older browsers
+      try {
+        const input = document.createElement("input");
+        document.body.appendChild(input);
+        input.focus();
+        const success = document.execCommand("paste");
+        if (success) {
+          const text = input.value;
+          handleRecipientChange(text);
+        }
+        document.body.removeChild(input);
+      } catch (fallbackErr) {
+        console.error("Fallback paste also failed:", fallbackErr);
+      }
+    }
   };
 
   return (
@@ -573,14 +628,19 @@ export default function CreatePage() {
                 <input
                   value={recipientInput}
                   onChange={(e) => handleRecipientChange(e.target.value)}
-                  placeholder="0x... or basename.eth"
+                  placeholder="0x... or username.base.eth"
                   className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50"
                 />
-                <button onClick={handlePaste} className="absolute right-3 top-3 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50 dark:bg-card">
+                <button 
+                  onClick={handlePaste} 
+                  type="button"
+                  title="Paste from clipboard"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50 dark:bg-card transition-colors"
+                >
                   <Clipboard className="h-5 w-5 text-primary" />
                 </button>
               </div>
-              {isResolving && <p className="ml-2 text-xs font-medium text-muted-foreground">Resolving domain...</p>}
+              {isResolving && <p className="ml-2 text-xs font-medium text-muted-foreground">Resolving username...</p>}
               {resolvedAddress && resolvedAddress.toLowerCase() !== recipientInput.toLowerCase() && (
                 <p className="ml-2 text-xs font-bold text-green-600">
                   ✓ {resolvedAddress.substring(0, 6)}...{resolvedAddress.substring(resolvedAddress.length - 4)}
@@ -775,11 +835,11 @@ function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
           <AlertCircle className="h-6 w-6" />
         </div>
-        <h3 className="mb-2 text-lg font-bold text-foreground">Disconnect Wallet?</h3>
-        <p className="mb-6 text-sm text-muted-foreground">You will need to reconnect to view your gifts.</p>
+        <h3 className="mb-2 text-lg font-bold">Disconnect Wallet?</h3>
+        <p className="mb-6 text-sm text-muted-foreground">You will need to reconnect to create gifts.</p>
         <div className="grid grid-cols-2 gap-3">
           <Button onClick={onClose} variant="secondary" className="rounded-xl font-bold">Cancel</Button>
-          <Button onClick={onConfirm} variant="destructive" className="rounded-xl font-bold bg-red-600 hover:bg-red-700">Disconnect</Button>
+          <Button onClick={onConfirm} className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white">Disconnect</Button>
         </div>
       </motion.div>
     </div>
