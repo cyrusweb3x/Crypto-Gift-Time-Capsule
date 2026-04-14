@@ -1,3 +1,4 @@
+// capsule/page.tsx
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
@@ -42,6 +43,7 @@ const POLL_INTERVAL_MS = 30_000;
 const TX_POLL_RETRIES = 45;
 const TX_POLL_DELAY_MS = 2_000;
 const ZERO_BIG = BigInt(0);
+const CLAIM_SUCCESS_DELAY_MS = 4_000; // 4 second delay after claim success
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type FilterType = "all" | "ETH" | "USDC";
@@ -69,6 +71,8 @@ interface Capsule {
   txHash: string;
   isMine: boolean;
   isForMe: boolean;
+  senderName?: string | null; // Resolved username
+  recipientName?: string | null; // Resolved username
 }
 
 interface SuccessData {
@@ -193,6 +197,30 @@ const safeGetIdentity = async (address: string): Promise<Identity> => {
   return { name: null, avatar: null };
 };
 
+// Batch resolve identities for addresses
+const resolveIdentities = async (addresses: string[]): Promise<Record<string, string | null>> => {
+  const uniqueAddresses = [...new Set(addresses.filter(a => a && a.startsWith("0x")))];
+  const results: Record<string, string | null> = {};
+  
+  await Promise.all(
+    uniqueAddresses.map(async (addr) => {
+      try {
+        const { getName } = await import("@coinbase/onchainkit/identity");
+        const { base } = await import("viem/chains");
+        const name = await getName({
+          address: addr as `0x${string}`,
+          chain: base,
+        });
+        results[addr.toLowerCase()] = name;
+      } catch {
+        results[addr.toLowerCase()] = null;
+      }
+    })
+  );
+  
+  return results;
+};
+
 // ─── Parsers ──────────────────────────────────────────────────────────────────
 const parseGift = (
   id: number,
@@ -238,6 +266,8 @@ const parseGift = (
       txHash: "",
       isMine: sender.toLowerCase() === me,
       isForMe: recipient.toLowerCase() === me,
+      senderName: null,
+      recipientName: null,
     };
   } catch (err) {
     console.error(`parseGift #${id} failed:`, err);
@@ -289,6 +319,8 @@ const parseRedPacket = (
       txHash: "",
       isMine: creator.toLowerCase() === me,
       isForMe: creator.toLowerCase() !== me,
+      senderName: null,
+      recipientName: null,
     };
   } catch (err) {
     console.error(`parseRedPacket #${id} failed:`, err);
@@ -464,6 +496,7 @@ export default function CapsulesPage() {
         const contract = new Contract(CONTRACT_ADDRESS, contractAbi, _p);
         const sent: Capsule[] = [];
         const received: Capsule[] = [];
+        const addressesToResolve: string[] = [];
 
         // ── Gifts ────────────────────────────────────────────────────────────
         try {
@@ -489,6 +522,10 @@ export default function CapsulesPage() {
               if (!parsed) continue;
               if (parsed.isMine) sent.push(parsed);
               if (parsed.isForMe) received.push(parsed);
+              
+              // Collect addresses for name resolution
+              if (parsed.isMine && parsed.recipient) addressesToResolve.push(parsed.recipient);
+              if (parsed.isForMe && parsed.sender) addressesToResolve.push(parsed.sender);
             }
             if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
@@ -524,11 +561,32 @@ export default function CapsulesPage() {
               if (!parsed) continue;
               if (parsed.isMine) sent.push(parsed);
               if (parsed.isForMe) received.push(parsed);
+              
+              // Collect creator address for name resolution
+              if (parsed.isForMe && parsed.sender) addressesToResolve.push(parsed.sender);
             }
             if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
         } catch (err) {
           console.error("Red packets fetch error:", err);
+        }
+
+        // Resolve identities for collected addresses
+        if (addressesToResolve.length > 0) {
+          const identities = await resolveIdentities(addressesToResolve);
+          
+          // Attach resolved names to capsules
+          sent.forEach(capsule => {
+            if (capsule.recipient) {
+              capsule.recipientName = identities[capsule.recipient.toLowerCase()];
+            }
+          });
+          
+          received.forEach(capsule => {
+            if (capsule.sender) {
+              capsule.senderName = identities[capsule.sender.toLowerCase()];
+            }
+          });
         }
 
         setMySentCapsules([...sent].sort(byIdDesc));
@@ -671,6 +729,9 @@ export default function CapsulesPage() {
           token: selectedCapsule.token,
         });
         setSelectedCapsule(null);
+        
+        // Wait 4 seconds before refreshing to allow indexer to update
+        await delay(CLAIM_SUCCESS_DELAY_MS);
         void fetchCapsules(true);
       } else if (receipt?.status === 0) {
         alert("Transaction failed on-chain.");
@@ -722,6 +783,24 @@ export default function CapsulesPage() {
     (c) => c && (filter === "all" || c.token === filter)
   );
 
+  // Helper to display name with proper format
+  const formatDisplayName = (capsule: Capsule, type: "sent" | "received"): string => {
+    if (capsule.isRedPacket) {
+      return `🧧 Red Packet${type === "received" ? " from " + (capsule.isAnonymous ? "Secret" : (capsule.senderName || shortAddress(capsule.sender))) : ""}`;
+    }
+    
+    if (type === "sent") {
+      // For sent gifts, show recipient name
+      if (capsule.recipientName) return capsule.recipientName;
+      return shortAddress(capsule.recipient);
+    } else {
+      // For received gifts, show sender name
+      if (capsule.isAnonymous) return "Secret Sender";
+      if (capsule.senderName) return capsule.senderName;
+      return shortAddress(capsule.sender);
+    }
+  };
+
   // ── Early return ───────────────────────────────────────────────────────────
   if (!mounted) {
     return (
@@ -764,7 +843,7 @@ export default function CapsulesPage() {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold">
-                    {basename || "Base User"}
+                    {basename ? basename : "Base User"}
                   </h3>
                   <button
                     onClick={handleCopy}
@@ -896,11 +975,7 @@ export default function CapsulesPage() {
                       <CapsuleCard
                         key={c.id}
                         type="sent"
-                        recipient={
-                          c.isRedPacket
-                            ? "Multiple Recipients"
-                            : shortAddress(c.recipient)
-                        }
+                        recipient={formatDisplayName(c, "sent")}
                         amount={c.amount}
                         token={c.token}
                         unlockDate={c.unlockDate}
@@ -908,6 +983,7 @@ export default function CapsulesPage() {
                         message={c.message}
                         txHash={c.txHash}
                         isWithdrawn={c.isWithdrawn}
+                        giftType={c.isRedPacket ? "redpacket" : "single"}
                       />
                     ))
                   ) : (
@@ -931,17 +1007,7 @@ export default function CapsulesPage() {
                       <CapsuleCard
                         key={c.id}
                         type="received"
-                        sender={
-                          c.isRedPacket
-                            ? `🧧 Red Packet from ${
-                                c.isAnonymous
-                                  ? "Secret"
-                                  : shortAddress(c.sender)
-                              }`
-                            : c.isAnonymous
-                            ? "Secret Sender"
-                            : shortAddress(c.sender)
-                        }
+                        sender={formatDisplayName(c, "received")}
                         amount={c.amount}
                         token={c.token}
                         unlockDate={c.unlockDate}
@@ -955,6 +1021,7 @@ export default function CapsulesPage() {
                             : undefined
                         }
                         onClick={() => setSelectedCapsule(c)}
+                        giftType={c.isRedPacket ? "redpacket" : "single"}
                       />
                     ))
                   ) : (
@@ -986,15 +1053,7 @@ export default function CapsulesPage() {
           type="detail"
           gift={{
             ...selectedCapsule,
-            sender: selectedCapsule.isRedPacket
-              ? `🧧 Red Packet from ${
-                  selectedCapsule.isAnonymous
-                    ? "Secret"
-                    : shortAddress(selectedCapsule.sender)
-                }`
-              : selectedCapsule.isAnonymous
-              ? "Anonymous"
-              : shortAddress(selectedCapsule.sender),
+            sender: formatDisplayName(selectedCapsule, "received"),
           }}
           onClaim={handleClaim}
           isClaiming={isClaiming}

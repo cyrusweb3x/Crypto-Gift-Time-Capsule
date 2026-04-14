@@ -20,6 +20,7 @@ interface CapsuleCardProps {
   txHash?: string;
   onClaim?: () => void;
   onClick?: () => void;
+  giftType?: "single" | "redpacket";
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -55,6 +56,7 @@ export function CapsuleCard({
   txHash,
   onClaim,
   onClick,
+  giftType = "single",
 }: CapsuleCardProps) {
   const [timeLeft, setTimeLeft] = useState("");
   const safeDateObj = toSafeDate(unlockDate);
@@ -109,7 +111,7 @@ export function CapsuleCard({
       <div className="mb-3 flex items-start justify-between">
         <div className="flex flex-col overflow-hidden">
           <span className="text-[10px] uppercase text-muted-foreground">
-            {type === "sent" ? "To:" : "From:"}
+            {giftType === "redpacket" ? "🧧 Red Packet" : (type === "sent" ? "To:" : "From:")}
           </span>
           <span className="truncate text-sm font-semibold text-foreground max-w-[180px]">
             {type === "sent" ? recipient : sender}
