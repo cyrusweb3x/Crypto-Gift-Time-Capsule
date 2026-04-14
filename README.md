@@ -1,3 +1,5 @@
+![Base Capsule Banner](./public/og-image.png)
+
 # 🎁 Base Capsule
 
 > A Time Capsule Gift Mini-App built on the Base ecosystem.
