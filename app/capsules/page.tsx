@@ -190,31 +190,32 @@ const publicClient = createPublicClient({
   transport: http("https://mainnet.base.org"),
 });
 
+const BASE_REVERSE_REGISTRAR = "0x79EA96012eEa67A83431F1701B3dFf7e37F9E282" as const;
+const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
+
 const resolveBasename = async (address: string): Promise<string | null> => {
-  // Method 1: Coinbase API (fastest, most reliable)
   try {
-    const res = await fetch(
-      `https://api.wallet.coinbase.com/rpc/v3/fw/names?addresses=${address.toLowerCase()}&chainId=8453`
-    );
-    if (res.ok) {
-      const data = await res.json() as {
-        names?: Array<{ name: string; address: string }>;
-      };
-      const found = data.names?.find(
-        (n) => n.address.toLowerCase() === address.toLowerCase()
-      );
-      if (found?.name) return found.name;
-    }
-  } catch { /* fallback */ }
+    // Step 1: Reverse Registrar থেকে node নাও
+    const node = await publicClient.readContract({
+      address: BASE_REVERSE_REGISTRAR,
+      abi: [
+        {
+          name: "node",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "addr", type: "address" }],
+          outputs: [{ name: "", type: "bytes32" }],
+        },
+      ],
+      functionName: "node",
+      args: [address as `0x${string}`],
+    }) as `0x${string}`;
 
-  // Method 2: viem contract call (fallback)
-  try {
-    const { normalize, namehash } = await import("viem/ens");
-    const addressForReverse = address.toLowerCase().replace("0x", "");
-    const reverseNode = `${addressForReverse}.addr.reverse`;
+    if (!node) return null;
 
+    // Step 2: সেই node দিয়ে Resolver থেকে name নাও
     const name = await publicClient.readContract({
-      address: "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD",
+      address: BASE_L2_RESOLVER,
       abi: [
         {
           name: "name",
@@ -225,33 +226,22 @@ const resolveBasename = async (address: string): Promise<string | null> => {
         },
       ],
       functionName: "name",
-      args: [namehash(normalize(reverseNode))],
+      args: [node],
     }) as string;
 
-    return name || null;
+    return name && name.length > 0 ? name : null;
   } catch {
     return null;
   }
 };
 
 const resolveBasenameAvatar = async (name: string): Promise<string | null> => {
-  // Method 1: Coinbase API
-  try {
-    const res = await fetch(
-      `https://api.wallet.coinbase.com/rpc/v3/fw/avatar?name=${encodeURIComponent(name)}&chainId=8453`
-    );
-    if (res.ok) {
-      const data = await res.json() as { avatar?: string };
-      if (data.avatar) return data.avatar;
-    }
-  } catch { /* fallback */ }
-
-  // Method 2: viem contract call (fallback)
   try {
     const { normalize, namehash } = await import("viem/ens");
+    const node = namehash(normalize(name));
 
     const avatar = await publicClient.readContract({
-      address: "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD",
+      address: BASE_L2_RESOLVER,
       abi: [
         {
           name: "text",
@@ -265,10 +255,10 @@ const resolveBasenameAvatar = async (name: string): Promise<string | null> => {
         },
       ],
       functionName: "text",
-      args: [namehash(normalize(name)), "avatar"],
+      args: [node, "avatar"],
     }) as string;
 
-    return avatar || null;
+    return avatar && avatar.length > 0 ? avatar : null;
   } catch {
     return null;
   }
