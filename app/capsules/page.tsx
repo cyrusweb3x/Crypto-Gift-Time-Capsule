@@ -43,7 +43,7 @@ const POLL_INTERVAL_MS = 30_000;
 const TX_POLL_RETRIES = 45;
 const TX_POLL_DELAY_MS = 2_000;
 const ZERO_BIG = BigInt(0);
-const CLAIM_SUCCESS_DELAY_MS = 4_000; // 4 second delay after claim success
+const CLAIM_SUCCESS_DELAY_MS = 4_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type FilterType = "all" | "ETH" | "USDC";
@@ -71,8 +71,12 @@ interface Capsule {
   txHash: string;
   isMine: boolean;
   isForMe: boolean;
-  senderName?: string | null; // Resolved username
-  recipientName?: string | null; // Resolved username
+  senderName?: string | null;
+  recipientName?: string | null;
+  // NEW: track if current user has claimed this red packet
+  hasClaimedRedPacket?: boolean;
+  // Store creation index for sorting
+  numericId: number;
 }
 
 interface SuccessData {
@@ -172,10 +176,9 @@ const safeUnlockDate = (unlockTime: number): Date => {
 const delay = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
+// Sort by numeric ID descending (newest first)
 const byIdDesc = (a: Capsule, b: Capsule): number => {
-  const na = parseInt(a.id.replace(/\D/g, ""), 10) || 0;
-  const nb = parseInt(b.id.replace(/\D/g, ""), 10) || 0;
-  return nb - na;
+  return b.numericId - a.numericId;
 };
 
 // ─── Identity ─────────────────────────────────────────────────────────────────
@@ -192,16 +195,20 @@ const safeGetIdentity = async (address: string): Promise<Identity> => {
       return { name, avatar: avt ?? null };
     }
   } catch {
-    // silently fail — identity is non-critical
+    // silently fail
   }
   return { name: null, avatar: null };
 };
 
 // Batch resolve identities for addresses
-const resolveIdentities = async (addresses: string[]): Promise<Record<string, string | null>> => {
-  const uniqueAddresses = [...new Set(addresses.filter(a => a && a.startsWith("0x")))];
+const resolveIdentities = async (
+  addresses: string[]
+): Promise<Record<string, string | null>> => {
+  const uniqueAddresses = [
+    ...new Set(addresses.filter((a) => a && a.startsWith("0x"))),
+  ];
   const results: Record<string, string | null> = {};
-  
+
   await Promise.all(
     uniqueAddresses.map(async (addr) => {
       try {
@@ -211,13 +218,13 @@ const resolveIdentities = async (addresses: string[]): Promise<Record<string, st
           address: addr as `0x${string}`,
           chain: base,
         });
-        results[addr.toLowerCase()] = name;
+        results[addr.toLowerCase()] = name ?? null;
       } catch {
         results[addr.toLowerCase()] = null;
       }
     })
   );
-  
+
   return results;
 };
 
@@ -252,6 +259,7 @@ const parseGift = (
 
     return {
       id: `gift-${id}`,
+      numericId: id,
       sender,
       recipient,
       amount,
@@ -268,6 +276,7 @@ const parseGift = (
       isForMe: recipient.toLowerCase() === me,
       senderName: null,
       recipientName: null,
+      hasClaimedRedPacket: false,
     };
   } catch (err) {
     console.error(`parseGift #${id} failed:`, err);
@@ -278,9 +287,24 @@ const parseGift = (
 const parseRedPacket = (
   id: number,
   rp: unknown[],
-  myAddress: string
+  myAddress: string,
+  claimedAmount?: string // amount the user claimed, if any
 ): Capsule | null => {
   try {
+    // Red packet struct fields (adjust indices based on your contract):
+    // [0] = id (uint256)
+    // [1] = creator (address)
+    // [2] = token (address)
+    // [3] = totalAmount (uint256)
+    // [4] = remainingAmount (uint256)
+    // [5] = totalShares (uint256)
+    // [6] = remainingShares (uint256)
+    // [7] = unlockTime (uint256)
+    // [8] = expireTime or something similar (uint256)
+    // [9] = isAnonymous (bool)
+    // [10] = isCancelled (bool)
+    // [11] = message (string)
+
     const creator = String(rp[1] ?? "");
     const tokenAddr = String(rp[2] ?? "");
     const totalAmt = rp[3] ?? ZERO_BIG;
@@ -301,26 +325,33 @@ const parseRedPacket = (
     const unlockDateObj = safeUnlockDate(unlockTime);
     const isUnlocked = Date.now() >= unlockDateObj.getTime();
     const me = myAddress.toLowerCase();
+    const isCreator = creator.toLowerCase() === me;
+
+    // If user has claimed this red packet, show their claimed amount
+    const displayAmount = claimedAmount ?? amount;
 
     return {
       id: `rp-${id}`,
+      numericId: id,
       sender: creator,
-      recipient: "Multiple",
-      amount,
+      recipient: isCreator ? "Multiple Recipients" : "Multiple",
+      amount: displayAmount,
       token,
       unlockDate: unlockDateObj,
       isUnlocked,
-      isWithdrawn: isCancelled,
+      // For red packets: isWithdrawn means cancelled (for creator) or claimed (for recipient)
+      isWithdrawn: isCancelled || Boolean(claimedAmount),
       message: isUnlocked ? content : "🔒 Message is hidden until unlocked",
       realMessage: content,
       isAnonymous: isAnon,
       isRedPacket: true,
       isCancelled,
       txHash: "",
-      isMine: creator.toLowerCase() === me,
-      isForMe: creator.toLowerCase() !== me,
+      isMine: isCreator,
+      isForMe: !isCreator,
       senderName: null,
       recipientName: null,
+      hasClaimedRedPacket: Boolean(claimedAmount),
     };
   } catch (err) {
     console.error(`parseRedPacket #${id} failed:`, err);
@@ -350,16 +381,22 @@ export default function CapsulesPage() {
   const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [selectedCapsule, setSelectedCapsule] = useState<Capsule | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
-  const [successModalData, setSuccessModalData] = useState<SuccessData | null>(null);
+  const [successModalData, setSuccessModalData] = useState<SuccessData | null>(
+    null
+  );
   const [showDisconnectAlert, setShowDisconnectAlert] = useState(false);
   const [pendingTxHash, setPendingTxHash] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Stable ref so fetchCapsules always reads latest provider/address
+  // Stable refs so fetchCapsules always reads latest provider/address
   const providerRef = useRef(provider);
   const addressRef = useRef(address);
-  useEffect(() => { providerRef.current = provider; }, [provider]);
-  useEffect(() => { addressRef.current = address; }, [address]);
+  useEffect(() => {
+    providerRef.current = provider;
+  }, [provider]);
+  useEffect(() => {
+    addressRef.current = address;
+  }, [address]);
 
   // ── Mount ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -372,7 +409,9 @@ export default function CapsulesPage() {
       try {
         const [bal, ub] = await Promise.all([
           _p.getBalance(acc),
-          new Contract(USDC_ADDRESS, ERC20_ABI, _p).balanceOf(acc) as Promise<bigint>,
+          new Contract(USDC_ADDRESS, ERC20_ABI, _p).balanceOf(
+            acc
+          ) as Promise<bigint>,
         ]);
         setEthBalance(Number(formatEther(bal)).toFixed(4));
         setUsdcBalance(Number(formatUnits(ub, 6)).toFixed(2));
@@ -411,6 +450,8 @@ export default function CapsulesPage() {
 
         // Non-blocking parallel tasks
         void fetchBalances(acc, _p);
+
+        // Fetch identity (name + avatar) for the connected user
         void safeGetIdentity(acc).then(({ name, avatar: avt }) => {
           if (name) setBasename(name);
           if (avt) setAvatar(avt);
@@ -498,7 +539,7 @@ export default function CapsulesPage() {
         const received: Capsule[] = [];
         const addressesToResolve: string[] = [];
 
-        // ── Gifts ────────────────────────────────────────────────────────────
+        // ── Gifts ──────────────────────────────────────────────────────────
         try {
           const totalGifts = Number(await contract.giftCounter());
           for (let i = totalGifts; i >= 1; i -= BATCH_SIZE) {
@@ -518,14 +559,20 @@ export default function CapsulesPage() {
             const results = await Promise.all(batch);
             for (const res of results) {
               if (!res) continue;
-              const parsed = parseGift(res.gid, res.data as unknown[], _addr);
+              const parsed = parseGift(
+                res.gid,
+                res.data as unknown[],
+                _addr
+              );
               if (!parsed) continue;
               if (parsed.isMine) sent.push(parsed);
               if (parsed.isForMe) received.push(parsed);
-              
+
               // Collect addresses for name resolution
-              if (parsed.isMine && parsed.recipient) addressesToResolve.push(parsed.recipient);
-              if (parsed.isForMe && parsed.sender) addressesToResolve.push(parsed.sender);
+              if (parsed.isMine && parsed.recipient)
+                addressesToResolve.push(parsed.recipient);
+              if (parsed.isForMe && parsed.sender)
+                addressesToResolve.push(parsed.sender);
             }
             if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
@@ -533,7 +580,7 @@ export default function CapsulesPage() {
           console.error("Gifts fetch error:", err);
         }
 
-        // ── Red Packets ───────────────────────────────────────────────────────
+        // ── Red Packets ────────────────────────────────────────────────────
         try {
           const totalRPs = Number(await contract.redPacketCounter());
           for (let i = totalRPs; i >= 1; i -= BATCH_SIZE) {
@@ -551,19 +598,66 @@ export default function CapsulesPage() {
               }
             );
             const results = await Promise.all(batch);
+
             for (const res of results) {
               if (!res) continue;
+
+              const rpData = res.data as unknown[];
+              const creator = String(rpData[1] ?? "");
+              const me = _addr.toLowerCase();
+              const isCreator = creator.toLowerCase() === me;
+
+              // Check if this user has claimed from this red packet
+              let claimedAmount: string | undefined;
+              if (!isCreator) {
+                try {
+                  // Try to get the claimed amount for this user
+                  // Method name may vary — try common names
+                  let rawClaimed: bigint | undefined;
+                  try {
+                    rawClaimed = await contract.claimedAmounts(res.rid, _addr) as bigint;
+                  } catch {
+                    try {
+                      rawClaimed = await contract.getClaimedAmount(res.rid, _addr) as bigint;
+                    } catch {
+                      // Not claimable or different interface
+                    }
+                  }
+
+                  if (rawClaimed && rawClaimed > ZERO_BIG) {
+                    const tokenAddr = String(rpData[2] ?? "");
+                    const isETH = isZeroAddress(tokenAddr);
+                    claimedAmount = isETH
+                      ? safeFormatEther(rawClaimed)
+                      : safeFormatUnits(rawClaimed, 6);
+                  }
+                } catch {
+                  // ignore claim check errors
+                }
+              }
+
               const parsed = parseRedPacket(
                 res.rid,
-                res.data as unknown[],
-                _addr
+                rpData,
+                _addr,
+                claimedAmount
               );
               if (!parsed) continue;
+
               if (parsed.isMine) sent.push(parsed);
-              if (parsed.isForMe) received.push(parsed);
-              
-              // Collect creator address for name resolution
-              if (parsed.isForMe && parsed.sender) addressesToResolve.push(parsed.sender);
+
+              // Show in received if:
+              // 1. User has claimed from this red packet, OR
+              // 2. Red packet is unlocked and not cancelled (user can potentially claim)
+              if (!isCreator) {
+                if (claimedAmount || (parsed.isUnlocked && !parsed.isCancelled)) {
+                  received.push({ ...parsed, isForMe: true });
+                }
+              }
+
+              // Collect creator address for name resolution (for received)
+              if (!isCreator && parsed.sender)
+                addressesToResolve.push(parsed.sender);
             }
             if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
@@ -571,20 +665,21 @@ export default function CapsulesPage() {
           console.error("Red packets fetch error:", err);
         }
 
-        // Resolve identities for collected addresses
+        // ── Resolve Identities ─────────────────────────────────────────────
         if (addressesToResolve.length > 0) {
           const identities = await resolveIdentities(addressesToResolve);
-          
-          // Attach resolved names to capsules
-          sent.forEach(capsule => {
-            if (capsule.recipient) {
-              capsule.recipientName = identities[capsule.recipient.toLowerCase()];
+
+          sent.forEach((capsule) => {
+            if (capsule.recipient && !capsule.isRedPacket) {
+              capsule.recipientName =
+                identities[capsule.recipient.toLowerCase()] ?? null;
             }
           });
-          
-          received.forEach(capsule => {
+
+          received.forEach((capsule) => {
             if (capsule.sender) {
-              capsule.senderName = identities[capsule.sender.toLowerCase()];
+              capsule.senderName =
+                identities[capsule.sender.toLowerCase()] ?? null;
             }
           });
         }
@@ -633,7 +728,11 @@ export default function CapsulesPage() {
                 setter((prev) =>
                   prev.map((x) =>
                     x?.id === c.id
-                      ? { ...x, isUnlocked: true, message: x.realMessage || "" }
+                      ? {
+                          ...x,
+                          isUnlocked: true,
+                          message: x.realMessage || "",
+                        }
                       : x
                   )
                 );
@@ -654,10 +753,7 @@ export default function CapsulesPage() {
   // ── Claim ──────────────────────────────────────────────────────────────────
   const handleClaim = useCallback(async (): Promise<void> => {
     if (!selectedCapsule || !signer || selectedCapsule.isRedPacket) return;
-    const giftIdNum = parseInt(
-      selectedCapsule.id.replace("gift-", ""),
-      10
-    );
+    const giftIdNum = parseInt(selectedCapsule.id.replace("gift-", ""), 10);
     if (isNaN(giftIdNum) || giftIdNum <= 0) {
       alert("Invalid gift ID");
       return;
@@ -704,7 +800,9 @@ export default function CapsulesPage() {
 
       // Poll for receipt
       const txProvider = (signer as any).provider ?? provider;
-      let receipt: Awaited<ReturnType<BrowserProvider["getTransactionReceipt"]>> | null = null;
+      let receipt: Awaited<
+        ReturnType<BrowserProvider["getTransactionReceipt"]>
+      > | null = null;
 
       for (let i = 0; i < TX_POLL_RETRIES; i++) {
         await delay(TX_POLL_DELAY_MS);
@@ -719,6 +817,7 @@ export default function CapsulesPage() {
       }
 
       if (receipt?.status === 1) {
+        // Mark as withdrawn immediately so claim button disappears
         setMyReceivedCapsules((p) =>
           p.map((c) =>
             c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
@@ -729,8 +828,8 @@ export default function CapsulesPage() {
           token: selectedCapsule.token,
         });
         setSelectedCapsule(null);
-        
-        // Wait 4 seconds before refreshing to allow indexer to update
+
+        // Wait before refreshing to let indexer update
         await delay(CLAIM_SUCCESS_DELAY_MS);
         void fetchCapsules(true);
       } else if (receipt?.status === 0) {
@@ -741,7 +840,11 @@ export default function CapsulesPage() {
       }
     } catch (err: unknown) {
       console.error("handleClaim error:", err);
-      const ethErr = err as { code?: string; message?: string; reason?: string };
+      const ethErr = err as {
+        code?: string;
+        message?: string;
+        reason?: string;
+      };
       if (ethErr?.code === "ACTION_REJECTED") {
         alert("Transaction rejected.");
       } else if (ethErr?.message?.includes("AlreadyWithdrawn")) {
@@ -783,22 +886,30 @@ export default function CapsulesPage() {
     (c) => c && (filter === "all" || c.token === filter)
   );
 
-  // Helper to display name with proper format
-  const formatDisplayName = (capsule: Capsule, type: "sent" | "received"): string => {
-    if (capsule.isRedPacket) {
-      return `🧧 Red Packet${type === "received" ? " from " + (capsule.isAnonymous ? "Secret" : (capsule.senderName || shortAddress(capsule.sender))) : ""}`;
-    }
-    
+  // ── Display Name Helper ────────────────────────────────────────────────────
+  const formatDisplayName = (
+    capsule: Capsule,
+    type: "sent" | "received"
+  ): string => {
     if (type === "sent") {
-      // For sent gifts, show recipient name
+      if (capsule.isRedPacket) return "Multiple Recipients";
       if (capsule.recipientName) return capsule.recipientName;
       return shortAddress(capsule.recipient);
     } else {
-      // For received gifts, show sender name
+      // received
       if (capsule.isAnonymous) return "Secret Sender";
       if (capsule.senderName) return capsule.senderName;
       return shortAddress(capsule.sender);
     }
+  };
+
+  // ── Claimable check ────────────────────────────────────────────────────────
+  // A capsule is claimable only if:
+  // - It's unlocked
+  // - NOT already withdrawn / claimed
+  // - NOT a red packet (red packets use different claim flow)
+  const isClaimable = (c: Capsule): boolean => {
+    return c.isUnlocked && !c.isWithdrawn && !c.isRedPacket && !c.hasClaimedRedPacket;
   };
 
   // ── Early return ───────────────────────────────────────────────────────────
@@ -825,10 +936,11 @@ export default function CapsulesPage() {
           <NotConnectedState onConnect={handleConnect} />
         ) : (
           <>
-            {/* ── Profile Card ────────────────────────────────────────────── */}
+            {/* ── Profile Card ─────────────────────────────────────────────── */}
             <div className="mb-8 rounded-3xl bg-secondary p-6">
               <div className="flex items-center gap-4 mb-6">
-                <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm">
+                {/* Avatar */}
+                <div className="h-14 w-14 overflow-hidden rounded-full border-2 border-background bg-white shadow-sm flex-shrink-0">
                   {avatar ? (
                     <img
                       src={avatar}
@@ -841,19 +953,21 @@ export default function CapsulesPage() {
                     </div>
                   )}
                 </div>
-                <div>
-                  <h3 className="text-lg font-bold">
-                    {basename ? basename : "Base User"}
+
+                {/* Name + address */}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-lg font-bold truncate">
+                    {basename ? basename : shortAddress(address)}
                   </h3>
                   <button
                     onClick={handleCopy}
                     className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors"
                   >
-                    {shortAddress(address)}
+                    <span className="truncate">{shortAddress(address)}</span>
                     {copied ? (
-                      <Check className="h-3 w-3 text-green-600" />
+                      <Check className="h-3 w-3 text-green-600 flex-shrink-0" />
                     ) : (
-                      <Copy className="h-3 w-3" />
+                      <Copy className="h-3 w-3 flex-shrink-0" />
                     )}
                   </button>
                 </div>
@@ -881,7 +995,7 @@ export default function CapsulesPage() {
               </div>
             </div>
 
-            {/* ── Error Banner ─────────────────────────────────────────────── */}
+            {/* ── Error Banner ──────────────────────────────────────────────── */}
             {fetchError && (
               <div className="mb-4 rounded-2xl bg-red-50 border border-red-200 p-4 flex items-center gap-3">
                 <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
@@ -899,7 +1013,7 @@ export default function CapsulesPage() {
               </div>
             )}
 
-            {/* ── Tabs ─────────────────────────────────────────────────────── */}
+            {/* ── Tabs ──────────────────────────────────────────────────────── */}
             <div className="mb-6 flex rounded-full bg-secondary p-1">
               <TabButton
                 isActive={activeTab === "received"}
@@ -913,7 +1027,7 @@ export default function CapsulesPage() {
               />
             </div>
 
-            {/* ── Filters ──────────────────────────────────────────────────── */}
+            {/* ── Filters ───────────────────────────────────────────────────── */}
             <div className="mb-6 flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
               <FilterChip
                 isActive={filter === "all"}
@@ -932,7 +1046,7 @@ export default function CapsulesPage() {
               />
             </div>
 
-            {/* ── List Header ───────────────────────────────────────────────── */}
+            {/* ── List Header ────────────────────────────────────────────────── */}
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-lg flex items-center gap-2">
                 {activeTab === "sent" ? "Sent Gifts" : "Inbox"}
@@ -953,7 +1067,7 @@ export default function CapsulesPage() {
               </Button>
             </div>
 
-            {/* ── Capsule Lists ─────────────────────────────────────────────── */}
+            {/* ── Capsule Lists ──────────────────────────────────────────────── */}
             <AnimatePresence mode="wait">
               {isLoadingData &&
               sentList.length === 0 &&
@@ -983,6 +1097,7 @@ export default function CapsulesPage() {
                         message={c.message}
                         txHash={c.txHash}
                         isWithdrawn={c.isWithdrawn}
+                        // Pass gift type for badge display
                         giftType={c.isRedPacket ? "redpacket" : "single"}
                       />
                     ))
@@ -1015,10 +1130,9 @@ export default function CapsulesPage() {
                         isWithdrawn={c.isWithdrawn}
                         message={c.message}
                         txHash={c.txHash}
+                        // Only show claim button if actually claimable
                         onClaim={
-                          c.isUnlocked && !c.isWithdrawn && !c.isRedPacket
-                            ? () => setSelectedCapsule(c)
-                            : undefined
+                          isClaimable(c) ? () => setSelectedCapsule(c) : undefined
                         }
                         onClick={() => setSelectedCapsule(c)}
                         giftType={c.isRedPacket ? "redpacket" : "single"}
@@ -1040,7 +1154,7 @@ export default function CapsulesPage() {
 
       <BottomNav />
 
-      {/* ── Gift Detail Modal ──────────────────────────────────────────────── */}
+      {/* ── Gift Detail Modal ────────────────────────────────────────────────── */}
       {selectedCapsule && (
         <GiftModal
           isOpen={!!selectedCapsule}
@@ -1055,12 +1169,12 @@ export default function CapsulesPage() {
             ...selectedCapsule,
             sender: formatDisplayName(selectedCapsule, "received"),
           }}
-          onClaim={handleClaim}
+          onClaim={isClaimable(selectedCapsule) ? handleClaim : undefined}
           isClaiming={isClaiming}
         />
       )}
 
-      {/* ── Success Modal ──────────────────────────────────────────────────── */}
+      {/* ── Success Modal ────────────────────────────────────────────────────── */}
       <AnimatePresence>
         {successModalData && (
           <SuccessModal
@@ -1072,7 +1186,7 @@ export default function CapsulesPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Disconnect Confirm ─────────────────────────────────────────────── */}
+      {/* ── Disconnect Confirm ───────────────────────────────────────────────── */}
       <DisconnectModal
         isOpen={showDisconnectAlert}
         onClose={() => setShowDisconnectAlert(false)}
@@ -1166,7 +1280,9 @@ function SuccessModal({ isOpen, onClose, amount, token }: SuccessModalProps) {
         </p>
         <div className="mb-8 flex flex-col items-center rounded-2xl bg-secondary py-6">
           <span className="text-4xl font-black text-blue-600">{amount}</span>
-          <span className="text-sm font-bold text-muted-foreground">{token}</span>
+          <span className="text-sm font-bold text-muted-foreground">
+            {token}
+          </span>
         </div>
         <Button
           onClick={onClose}
@@ -1184,7 +1300,11 @@ interface DisconnectModalProps {
   onClose: () => void;
   onConfirm: () => void;
 }
-function DisconnectModal({ isOpen, onClose, onConfirm }: DisconnectModalProps) {
+function DisconnectModal({
+  isOpen,
+  onClose,
+  onConfirm,
+}: DisconnectModalProps) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
