@@ -1,3 +1,4 @@
+// create/page.tsx
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -30,6 +31,14 @@ const ERC20_ABI = [
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)"
 ];
+
+// Base L2 resolver setup
+const basePublicClient = createPublicClient({
+  chain: base,
+  transport: http("https://mainnet.base.org"),
+});
+
+const BASE_L2_RESOLVER_ADDR = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
 
 function useEvmWallet() {
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
@@ -207,39 +216,38 @@ export default function CreatePage() {
     } else { setNeedsApproval(false); }
   }, [selectedToken, amount, usdcAllowance, usdcDecimals]);
 
-  // ─── Username/Address Resolution ─────────────────────────────────────────────
+  // Username/Address Resolution via Base L2 Resolver
   const resolveUsername = async (name: string): Promise<string | null> => {
     try {
-      // Try OnChainKit for Base usernames (cyrusweb3x.base.eth)
-      const { getAddress } = await import("@coinbase/onchainkit/identity");
-      const { base } = await import("viem/chains");
-      const resolved = await getAddress({
-        name: name as string,
-        chain: base,
-      });
-      if (resolved) return resolved;
-    } catch (e) {
-      console.log("OnChainKit resolution failed, trying ENS:", e);
-    }
-    
+      const { normalize, namehash } = await import("viem/ens");
+      const node = namehash(normalize(name));
+
+      const resolved = await basePublicClient.readContract({
+        address: BASE_L2_RESOLVER_ADDR,
+        abi: [
+          {
+            name: "addr",
+            type: "function",
+            stateMutability: "view",
+            inputs: [{ name: "node", type: "bytes32" }],
+            outputs: [{ name: "", type: "address" }],
+          },
+        ],
+        functionName: "addr",
+        args: [node],
+      }) as string;
+
+      if (resolved && resolved !== "0x0000000000000000000000000000000000000000") {
+        return resolved;
+      }
+    } catch { /* fallback */ }
+
     try {
-      // Fallback to ENS resolution via Base provider
-      const baseProvider = new JsonRpcProvider("https://mainnet.base.org");
-      const resolved = await baseProvider.resolveName(name);
-      if (resolved) return resolved;
-    } catch (e) {
-      console.log("Base ENS resolution failed:", e);
-    }
-    
-    try {
-      // Last resort: Mainnet ENS
       const mainnetProvider = new JsonRpcProvider("https://eth.llamarpc.com");
       const resolved = await mainnetProvider.resolveName(name);
       if (resolved) return resolved;
-    } catch (e) {
-      console.log("Mainnet ENS resolution failed:", e);
-    }
-    
+    } catch { /* ignore */ }
+
     return null;
   };
 
@@ -249,14 +257,12 @@ export default function CreatePage() {
     setErrors(prev => ({ ...prev, recipient: "" }));
 
     if (!safeVal) { setResolvedAddress(""); return; }
-    
-    // Direct address input
-    if (ethers.isAddress(safeVal)) { 
-      setResolvedAddress(safeVal); 
-      return; 
+
+    if (ethers.isAddress(safeVal)) {
+      setResolvedAddress(safeVal);
+      return;
     }
 
-    // Username resolution (.base.eth, .eth, etc.)
     if ((safeVal as string).includes(".")) {
       setIsResolving(true);
       try {
@@ -267,11 +273,11 @@ export default function CreatePage() {
           setResolvedAddress("");
           setErrors(prev => ({ ...prev, recipient: "Could not resolve username" }));
         }
-      } catch (e) { 
+      } catch (e) {
         console.error("Resolution failed", e);
-        setResolvedAddress(""); 
-      } finally { 
-        setIsResolving(false); 
+        setResolvedAddress("");
+      } finally {
+        setIsResolving(false);
       }
     } else {
       setResolvedAddress("");
@@ -508,33 +514,14 @@ export default function CreatePage() {
     setMaxClaimers("10");
   };
 
-  // ─── Fixed Paste Handler with better error handling ────────────────────────────
   const handlePaste = async () => {
     try {
-      if (!navigator.clipboard || !navigator.clipboard.readText) {
-        console.warn("Clipboard API not available");
-        return;
-      }
       const text = await navigator.clipboard.readText();
-      if (text) {
-        handleRecipientChange(text);
+      if (text && text.trim()) {
+        handleRecipientChange(text.trim());
       }
-    } catch (err) {
-      console.error("Paste failed:", err);
-      // Fallback: try to use document.execCommand for older browsers
-      try {
-        const input = document.createElement("input");
-        document.body.appendChild(input);
-        input.focus();
-        const success = document.execCommand("paste");
-        if (success) {
-          const text = input.value;
-          handleRecipientChange(text);
-        }
-        document.body.removeChild(input);
-      } catch (fallbackErr) {
-        console.error("Fallback paste also failed:", fallbackErr);
-      }
+    } catch {
+      // clipboard permission denied
     }
   };
 
@@ -633,8 +620,8 @@ export default function CreatePage() {
                   placeholder="0x... or username.base.eth"
                   className="w-full rounded-xl bg-transparent p-4 pr-12 text-lg font-medium outline-none placeholder:text-muted-foreground/50"
                 />
-                <button 
-                  onClick={handlePaste} 
+                <button
+                  onClick={handlePaste}
                   type="button"
                   title="Paste from clipboard"
                   className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl bg-white p-2 shadow-sm hover:bg-gray-50 dark:bg-card transition-colors"
