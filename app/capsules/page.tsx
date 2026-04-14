@@ -195,7 +195,7 @@ const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD" as const;
 
 const resolveBasename = async (address: string): Promise<string | null> => {
   try {
-    // Step 1: Reverse Registrar থেকে node নাও
+    
     const node = await publicClient.readContract({
       address: BASE_REVERSE_REGISTRAR,
       abi: [
@@ -213,7 +213,7 @@ const resolveBasename = async (address: string): Promise<string | null> => {
 
     if (!node) return null;
 
-    // Step 2: সেই node দিয়ে Resolver থেকে name নাও
+  
     const name = await publicClient.readContract({
       address: BASE_L2_RESOLVER,
       abi: [
@@ -258,10 +258,42 @@ const resolveBasenameAvatar = async (name: string): Promise<string | null> => {
       args: [node, "avatar"],
     }) as string;
 
-    return avatar && avatar.length > 0 ? avatar : null;
-  } catch {
-    return null;
-  }
+    if (avatar && avatar.length > 0) return avatar;
+  } catch { /* fallback */ }
+
+  // Farcaster API — Base App profile picture এখানে থাকে
+  try {
+    const username = name.replace(".base.eth", "");
+    const res = await fetch(
+      `https://api.farcaster.xyz/v2/user-by-username?username=${username}`,
+      { headers: { "Content-Type": "application/json" } }
+    );
+    if (res.ok) {
+      const data = await res.json() as {
+        result?: { user?: { pfp?: { url?: string } } };
+      };
+      const pfp = data?.result?.user?.pfp?.url;
+      if (pfp) return pfp;
+    }
+  } catch { /* fallback */ }
+
+  // Neynar API (Farcaster alternative)
+  try {
+    const username = name.replace(".base.eth", "");
+    const res = await fetch(
+      `https://api.neynar.com/v1/farcaster/user-by-username?username=${username}`,
+      { headers: { "Content-Type": "application/json" } }
+    );
+    if (res.ok) {
+      const data = await res.json() as {
+        result?: { user?: { pfp?: { url?: string } } };
+      };
+      const pfp = data?.result?.user?.pfp?.url;
+      if (pfp) return pfp;
+    }
+  } catch { /* fallback */ }
+
+  return null;
 };
 
 // ─── Identity ─────────────────────────────────────────────────────────────────
