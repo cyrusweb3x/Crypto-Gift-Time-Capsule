@@ -18,10 +18,6 @@ const BASE_CHAIN_ID = "0x2105";
 const BASE_CHAIN_ID_BIGINT = BigInt(8453);
 const PUBLIC_RPC = "https://mainnet.base.org";
 
-// Fixed display values for ETH and USDC
-const DISPLAY_ETH = "4.2";
-const DISPLAY_USDC = "1,748.6";
-
 export default function HomePage() {
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
@@ -87,7 +83,6 @@ export default function HomePage() {
     }
   }, [checkConnection, confirmDisconnect]);
 
-  // Fetch only gift count from contract, auto-refresh every 60s
   const fetchGiftCount = useCallback(async () => {
     try {
       const provider = new JsonRpcProvider(PUBLIC_RPC);
@@ -147,8 +142,8 @@ export default function HomePage() {
         {/* ── Stats ── */}
         <section className="mb-12 grid grid-cols-3 gap-2">
           <StatCard value={giftsSent} label="Created" delay={0.2} isLive />
-          <StatCard value={DISPLAY_ETH} label="ETH Locked" delay={0.3} />
-          <StatCard value={DISPLAY_USDC} label="USDC Locked" delay={0.4} />
+          <StatCard value="ETH & USDC" label="Asset Types" delay={0.3} />
+          <StatCard value="NO CUSTODY" label="On-Chain" delay={0.4} />
         </section>
 
         {/* ── Features ── */}
@@ -302,7 +297,6 @@ function StatCard({
       transition={{ delay }}
       className="relative flex flex-col items-center justify-center rounded-2xl bg-secondary p-4 text-center"
     >
-      {/* Live dot */}
       {isLive && (
         <span className="absolute top-2 right-2 flex h-2 w-2">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
