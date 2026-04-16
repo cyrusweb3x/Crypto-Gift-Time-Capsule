@@ -30,6 +30,8 @@ export const metadata: Metadata = {
         },
       },
     }),
+    "talentapp:project_verification":
+      "7ac959f85cd4b4f4f41d0e09c11abe51aa50ad2389e4e78d707ae3556edb830b173737697f05a563b832f652ed09e8ae719c3d0103533af0c0431176a2399785",
   },
 };
 
