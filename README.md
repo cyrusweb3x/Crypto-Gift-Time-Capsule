@@ -49,6 +49,43 @@ Send gifts directly to Base usernames like `username.base.eth` — no need to co
 
 ---
 
+## 🖼️ App Screenshots
+
+<p align="center">
+  <img src="./public/UI/home.png" width="18%" alt="Home" />
+  <img src="./public/UI/single-gift.png" width="18%" alt="Single Gift" />
+  <img src="./public/UI/red-packet.png" width="18%" alt="Red Packet" />
+  <img src="./public/UI/capsule-recv.png" width="18%" alt="Received Capsule" />
+  <img src="./public/UI/capsule-sent.png" width="18%" alt="Sent Capsule" />
+</p>
+
+<p align="center">
+  <img src="./public/UI/capsule-red packet.png" width="18%" alt="Red Packet Capsule" />
+</p>
+
+---
+
+## 🔐 Security
+
+Base Capsule is built with a security-first approach. Your funds are protected by multiple layers:
+
+| Feature | Details |
+|--------|---------|
+| ♻️ ReentrancyGuard | All functions protected against reentrancy attacks |
+| ⏳ Emergency Delay | 3-day mandatory timelock before any emergency withdrawal |
+| ⏸️ Pausable | Emergency stop mechanism for critical situations |
+| 🔑 Ownership | `renounceOwnership` permanently disabled — contract always has an owner |
+| 📖 Open Source | Fully transparent — every line of code is public |
+| ✅ Verified Contract | Verified and readable on Basescan |
+
+> **Trust math, not promises.**  
+> Even the contract owner cannot instantly access user funds.  
+> Everything is enforced by code on Base Mainnet.
+
+- 📄 [View Verified Contract on Basescan](https://basescan.org/address/0xc160E1b43203A4d18E4069437Bc960248f91d847#code)
+
+---
+
 ## 🔍 Transparency
 
 This project is fully open source and verifiable.
