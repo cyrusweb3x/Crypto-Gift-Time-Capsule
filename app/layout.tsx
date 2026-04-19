@@ -2,12 +2,10 @@
 
 import React from "react";
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
+import { Toaster } from "sonner";
 import { MiniAppGuard } from "@/components/miniapp-guard";
 import "./globals.css";
-
-const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Base Capsule",
@@ -50,10 +48,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.className} antialiased`}>
+      <body className="font-sans antialiased">
         <MiniAppGuard>
           {children}
         </MiniAppGuard>
+        <Toaster theme="dark" position="top-center" richColors />
         <Analytics />
       </body>
     </html>

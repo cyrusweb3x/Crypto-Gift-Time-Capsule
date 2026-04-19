@@ -31,8 +31,10 @@ import {
 import contractAbi from "@/contractAbi.json";
 import type {} from "@coinbase/onchainkit/identity";
 import { appendBuilderCode } from "@/lib/builderCode";
+import { decryptMessage } from "@/lib/messageCrypto";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
+import { toast } from "sonner";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
@@ -116,6 +118,21 @@ const safeParseMessage = (rawMsg: unknown): ParsedMessage => {
     }
   } catch {
     return { content: "", isAnonymous: false };
+  }
+};
+
+/** Attempt decryption with the current user's address, falling back to legacy decode. */
+const safeDecryptMessage = async (
+  rawMsg: unknown,
+  recipientAddress: string
+): Promise<ParsedMessage> => {
+  if (!rawMsg || typeof rawMsg !== "string" || !rawMsg.trim()) {
+    return { content: "", isAnonymous: false };
+  }
+  try {
+    return await decryptMessage(String(rawMsg), recipientAddress);
+  } catch {
+    return safeParseMessage(rawMsg);
   }
 };
 
@@ -326,11 +343,11 @@ const resolveIdentities = async (
 };
 
 // ─── Parsers ──────────────────────────────────────────────────────────────────
-const parseGift = (
+const parseGift = async (
   id: number,
   g: unknown[],
   myAddress: string
-): Capsule | null => {
+): Promise<Capsule | null> => {
   try {
     const sender = String(g[0] ?? "");
     const recipient = String(g[1] ?? "");
@@ -349,10 +366,12 @@ const parseGift = (
       ? safeFormatEther(amountRaw)
       : safeFormatUnits(amountRaw, 6);
 
-    const { content } = safeParseMessage(rawMsg);
     const unlockDateObj = safeUnlockDate(unlockTime);
     const isUnlocked = Date.now() >= unlockDateObj.getTime();
     const me = myAddress.toLowerCase();
+
+    // Decrypt message using recipient address (for gifts the recipient holds the key)
+    const { content } = await safeDecryptMessage(rawMsg, recipient);
 
     return {
       id: `gift-${id}`,
@@ -382,12 +401,12 @@ const parseGift = (
   }
 };
 
-const parseRedPacket = (
+const parseRedPacket = async (
   id: number,
   rp: unknown[],
   myAddress: string,
   claimedAmount?: string
-): Capsule | null => {
+): Promise<Capsule | null> => {
   try {
     const creator = String(rp[1] ?? "");
     const tokenAddr = String(rp[2] ?? "");
@@ -409,7 +428,8 @@ const parseRedPacket = (
       ? safeFormatEther(totalAmt)
       : safeFormatUnits(totalAmt, 6);
 
-    const { content } = safeParseMessage(rawMsg);
+    // Red packets are encrypted with the creator's address
+    const { content } = await safeDecryptMessage(rawMsg, creator);
     const unlockDateObj = safeUnlockDate(unlockTime);
     const isUnlocked = Date.now() >= unlockDateObj.getTime();
     const me = myAddress.toLowerCase();
@@ -480,6 +500,11 @@ export default function CapsulesPage() {
   const addressRef = useRef(address);
   useEffect(() => { providerRef.current = provider; }, [provider]);
   useEffect(() => { addressRef.current = address; }, [address]);
+
+  // Incremental fetch tracking
+  const lastGiftCounterRef = useRef(0);
+  const lastRPCounterRef = useRef(0);
+  const lastFetchedAddressRef = useRef("");
 
   // ── Mount ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -600,12 +625,23 @@ export default function CapsulesPage() {
     };
   }, [mounted, checkConnection, confirmDisconnect]);
 
-  // ── Fetch Capsules ─────────────────────────────────────────────────────────
+  // ── Fetch Capsules (incremental on silent polls) ────────────────────────────
   const fetchCapsules = useCallback(
     async (isSilent = false): Promise<void> => {
       const _p = providerRef.current;
       const _addr = addressRef.current;
       if (!_p || !_addr) return;
+
+      // Detect address change → force full re-fetch
+      const addressChanged = lastFetchedAddressRef.current !== _addr.toLowerCase();
+      if (addressChanged) {
+        lastGiftCounterRef.current = 0;
+        lastRPCounterRef.current = 0;
+        lastFetchedAddressRef.current = _addr.toLowerCase();
+      }
+
+      // On explicit refresh, also do a full fetch
+      const isIncremental = isSilent && !addressChanged && lastGiftCounterRef.current > 0;
 
       if (!isSilent) setIsLoadingData(true);
       else setIsBackgroundLoading(true);
@@ -613,44 +649,50 @@ export default function CapsulesPage() {
 
       try {
         const contract = new Contract(CONTRACT_ADDRESS, contractAbi, _p);
-        const sent: Capsule[] = [];
-        const received: Capsule[] = [];
+        const sent: Capsule[] = isIncremental ? [...mySentCapsules] : [];
+        const received: Capsule[] = isIncremental ? [...myReceivedCapsules] : [];
         const addressesToResolve: string[] = [];
 
         // ── Gifts ────────────────────────────────────────────────────────────
         try {
           const totalGifts = Number(await contract.giftCounter());
-          for (let i = totalGifts; i >= 1; i -= BATCH_SIZE) {
-            const batch = Array.from(
-              { length: Math.min(BATCH_SIZE, i) },
-              (_, j) => {
-                const gid = i - j;
-                return contract
-                  .gifts(gid)
-                  .then((g: unknown) => ({ gid, data: g }))
-                  .catch((e: unknown) => {
-                    console.warn(`gifts(${gid}) failed:`, e);
-                    return null;
-                  });
-              }
-            );
-            const results = await Promise.all(batch);
-            for (const res of results) {
-              if (!res) continue;
-              const parsed = parseGift(res.gid, res.data as unknown[], _addr);
-              if (!parsed) continue;
+          const giftStart = isIncremental ? lastGiftCounterRef.current + 1 : 1;
 
-              if (parsed.isMine) {
-                sent.push(parsed);
-                if (parsed.recipient) addressesToResolve.push(parsed.recipient);
+          if (totalGifts >= giftStart) {
+            for (let i = totalGifts; i >= giftStart; i -= BATCH_SIZE) {
+              const batchEnd = Math.max(giftStart, i - BATCH_SIZE + 1);
+              const batch = Array.from(
+                { length: i - batchEnd + 1 },
+                (_, j) => {
+                  const gid = i - j;
+                  return contract
+                    .gifts(gid)
+                    .then((g: unknown) => ({ gid, data: g }))
+                    .catch((e: unknown) => {
+                      console.warn(`gifts(${gid}) failed:`, e);
+                      return null;
+                    });
+                }
+              );
+              const results = await Promise.all(batch);
+              for (const res of results) {
+                if (!res) continue;
+                const parsed = await parseGift(res.gid, res.data as unknown[], _addr);
+                if (!parsed) continue;
+
+                if (parsed.isMine) {
+                  sent.push(parsed);
+                  if (parsed.recipient) addressesToResolve.push(parsed.recipient);
+                }
+                if (parsed.isForMe) {
+                  received.push(parsed);
+                  if (parsed.sender) addressesToResolve.push(parsed.sender);
+                }
               }
-              if (parsed.isForMe) {
-                received.push(parsed);
-                if (parsed.sender) addressesToResolve.push(parsed.sender);
-              }
+              if (i - BATCH_SIZE >= giftStart) await delay(BATCH_DELAY_MS);
             }
-            if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
+          lastGiftCounterRef.current = totalGifts;
         } catch (err) {
           console.error("Gifts fetch error:", err);
         }
@@ -658,72 +700,78 @@ export default function CapsulesPage() {
         // ── Red Packets ───────────────────────────────────────────────────────
         try {
           const totalRPs = Number(await contract.redPacketCounter());
-          for (let i = totalRPs; i >= 1; i -= BATCH_SIZE) {
-            const batch = Array.from(
-              { length: Math.min(BATCH_SIZE, i) },
-              (_, j) => {
-                const rid = i - j;
-                return contract
-                  .redPackets(rid)
-                  .then((rp: unknown) => ({ rid, data: rp }))
-                  .catch((e: unknown) => {
-                    console.warn(`redPackets(${rid}) failed:`, e);
-                    return null;
-                  });
-              }
-            );
-            const results = await Promise.all(batch);
+          const rpStart = isIncremental ? lastRPCounterRef.current + 1 : 1;
 
-            for (const res of results) {
-              if (!res) continue;
-              const rpData = res.data as unknown[];
-              const creator = String(rpData[1] ?? "");
-              const me = _addr.toLowerCase();
-              const isCreator = creator.toLowerCase() === me;
+          if (totalRPs >= rpStart) {
+            for (let i = totalRPs; i >= rpStart; i -= BATCH_SIZE) {
+              const batchEnd = Math.max(rpStart, i - BATCH_SIZE + 1);
+              const batch = Array.from(
+                { length: i - batchEnd + 1 },
+                (_, j) => {
+                  const rid = i - j;
+                  return contract
+                    .redPackets(rid)
+                    .then((rp: unknown) => ({ rid, data: rp }))
+                    .catch((e: unknown) => {
+                      console.warn(`redPackets(${rid}) failed:`, e);
+                      return null;
+                    });
+                }
+              );
+              const results = await Promise.all(batch);
 
-              let claimedAmount: string | undefined;
-              if (!isCreator) {
-                try {
-                  let rawClaimed: bigint | undefined;
+              for (const res of results) {
+                if (!res) continue;
+                const rpData = res.data as unknown[];
+                const creator = String(rpData[1] ?? "");
+                const me = _addr.toLowerCase();
+                const isCreator = creator.toLowerCase() === me;
+
+                let claimedAmount: string | undefined;
+                if (!isCreator) {
                   try {
-                    rawClaimed = (await contract.claimedAmounts(res.rid, _addr)) as bigint;
-                  } catch {
+                    let rawClaimed: bigint | undefined;
                     try {
-                      rawClaimed = (await contract.getClaimedAmount(res.rid, _addr)) as bigint;
+                      rawClaimed = (await contract.claimedAmounts(res.rid, _addr)) as bigint;
                     } catch {
                       try {
-                        rawClaimed = (await contract.claims(res.rid, _addr)) as bigint;
+                        rawClaimed = (await contract.getClaimedAmount(res.rid, _addr)) as bigint;
                       } catch {
-                        // unknown ABI — skip
+                        try {
+                          rawClaimed = (await contract.claims(res.rid, _addr)) as bigint;
+                        } catch {
+                          // unknown ABI — skip
+                        }
                       }
                     }
+                    if (rawClaimed && rawClaimed > ZERO_BIG) {
+                      const tokenAddr = String(rpData[2] ?? "");
+                      const isETH = isZeroAddress(tokenAddr);
+                      claimedAmount = isETH
+                        ? safeFormatEther(rawClaimed)
+                        : safeFormatUnits(rawClaimed, 6);
+                    }
+                  } catch {
+                    // ignore claim check errors
                   }
-                  if (rawClaimed && rawClaimed > ZERO_BIG) {
-                    const tokenAddr = String(rpData[2] ?? "");
-                    const isETH = isZeroAddress(tokenAddr);
-                    claimedAmount = isETH
-                      ? safeFormatEther(rawClaimed)
-                      : safeFormatUnits(rawClaimed, 6);
+                }
+
+                const parsed = await parseRedPacket(res.rid, rpData, _addr, claimedAmount);
+                if (!parsed) continue;
+
+                if (isCreator) {
+                  sent.push(parsed);
+                } else {
+                  if (claimedAmount) {
+                    received.push({ ...parsed, isForMe: true });
                   }
-                } catch {
-                  // ignore claim check errors
+                  if (parsed.sender) addressesToResolve.push(parsed.sender);
                 }
               }
-
-              const parsed = parseRedPacket(res.rid, rpData, _addr, claimedAmount);
-              if (!parsed) continue;
-
-              if (isCreator) {
-                sent.push(parsed);
-              } else {
-                if (claimedAmount || (parsed.isUnlocked && !parsed.isCancelled)) {
-                  received.push({ ...parsed, isForMe: true });
-                }
-                if (parsed.sender) addressesToResolve.push(parsed.sender);
-              }
+              if (i - BATCH_SIZE >= rpStart) await delay(BATCH_DELAY_MS);
             }
-            if (i > BATCH_SIZE) await delay(BATCH_DELAY_MS);
           }
+          lastRPCounterRef.current = totalRPs;
         } catch (err) {
           console.error("Red packets fetch error:", err);
         }
@@ -746,8 +794,18 @@ export default function CapsulesPage() {
           });
         }
 
-        setMySentCapsules([...sent].sort(byCreatedAtDesc));
-        setMyReceivedCapsules([...received].sort(byCreatedAtDesc));
+        // Deduplicate by id before setting state (incremental may overlap)
+        const dedup = (arr: Capsule[]): Capsule[] => {
+          const seen = new Set<string>();
+          return arr.filter((c) => {
+            if (seen.has(c.id)) return false;
+            seen.add(c.id);
+            return true;
+          });
+        };
+
+        setMySentCapsules(dedup([...sent]).sort(byCreatedAtDesc));
+        setMyReceivedCapsules(dedup([...received]).sort(byCreatedAtDesc));
         void fetchBalances(_addr, _p);
       } catch (err) {
         console.error("fetchCapsules error:", err);
@@ -757,7 +815,7 @@ export default function CapsulesPage() {
         setIsBackgroundLoading(false);
       }
     },
-    [fetchBalances]
+    [fetchBalances, mySentCapsules, myReceivedCapsules]
   );
 
   // ── Poll ───────────────────────────────────────────────────────────────────
@@ -816,7 +874,7 @@ export default function CapsulesPage() {
       10
     );
     if (isNaN(giftIdNum) || giftIdNum <= 0) {
-      alert("Invalid gift ID");
+      toast.error("Invalid gift ID");
       return;
     }
 
@@ -829,11 +887,11 @@ export default function CapsulesPage() {
       try {
         const g = (await contract.gifts(giftIdNum)) as unknown[];
         if (!g || isZeroAddress(g[0])) {
-          alert("Gift does not exist");
+          toast.error("Gift does not exist");
           return;
         }
         if (Boolean(g[5])) {
-          alert("Already claimed");
+          toast.error("Already claimed");
           setMyReceivedCapsules((p) =>
             p.map((c) =>
               c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
@@ -887,25 +945,25 @@ export default function CapsulesPage() {
         await delay(CLAIM_SUCCESS_DELAY_MS);
         void fetchCapsules(true);
       } else if (receipt?.status === 0) {
-        alert("Transaction failed on-chain.");
+        toast.error("Transaction failed on-chain.");
       } else {
-        alert("Still processing — check your wallet and refresh.");
+        toast.info("Still processing — check your wallet and refresh.");
         setSelectedCapsule(null);
       }
     } catch (err: unknown) {
       console.error("handleClaim error:", err);
       const ethErr = err as { code?: string; message?: string; reason?: string };
       if (ethErr?.code === "ACTION_REJECTED") {
-        alert("Transaction rejected.");
+        toast.error("Transaction rejected.");
       } else if (ethErr?.message?.includes("AlreadyWithdrawn")) {
-        alert("Already claimed.");
+        toast.error("Already claimed.");
         setMyReceivedCapsules((p) =>
           p.map((c) =>
             c?.id === selectedCapsule.id ? { ...c, isWithdrawn: true } : c
           )
         );
       } else {
-        alert(
+        toast.error(
           "Claim failed: " +
             (ethErr?.reason ?? ethErr?.message ?? "Unknown error")
         );

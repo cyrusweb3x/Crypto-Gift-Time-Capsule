@@ -14,6 +14,8 @@ import { ConfettiEffect } from "@/components/confetti-effect";
 
 import { ethers, BrowserProvider, Contract } from "ethers";
 import contractAbi from "@/contractAbi.json";
+import { decryptMessage } from "@/lib/messageCrypto";
+import { toast } from "sonner";
 
 declare global {
   interface Window {
@@ -26,7 +28,7 @@ const CONTRACT_ADDRESS = "0xc160E1b43203A4d18E4069437Bc960248f91d847";
 const BASE_CHAIN_ID = "0x2105"; // 8453
 const STORAGE_KEY = "yupp_wallet_connected";
 
-const parseGiftMessage = (rawMsg: string) => {
+const parseGiftMessageLegacy = (rawMsg: string) => {
   try {
     const decoded = atob(rawMsg);
     const json = JSON.parse(decoded);
@@ -49,9 +51,9 @@ export default function RedPacketClaimPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState("");
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
-  const [signer, setSigner] = useState<any>(null);
+  const [signer, setSigner] = useState<Awaited<ReturnType<BrowserProvider["getSigner"]>> | null>(null);
 
-  const [packetData, setPacketData] = useState<any>(null);
+  const [packetData, setPacketData] = useState<unknown[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isClaiming, setIsClaiming] = useState(false);
   const [hasClaimed, setHasClaimed] = useState(false);
@@ -62,6 +64,7 @@ export default function RedPacketClaimPage() {
 
   const [timeLeft, setTimeLeft] = useState(0);
   const [isUnlocked, setIsUnlocked] = useState(false);
+  const [parsedMsg, setParsedMsg] = useState<{ content: string; isAnonymous: boolean }>({ content: "", isAnonymous: false });
 
   const setupWallet = async (acc: string, _provider: BrowserProvider) => {
     const _signer = await _provider.getSigner();
@@ -212,9 +215,10 @@ export default function RedPacketClaimPage() {
       
       setSuccess(true);
       fetchPacketData(); 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Claim Failed:", error);
-      alert("Claim failed: " + (error.reason || error.message || "Unknown error"));
+      const err = error as { reason?: string; message?: string };
+      toast.error("Claim failed: " + (err.reason || err.message || "Unknown error"));
     } finally {
       setIsClaiming(false);
     }
@@ -229,18 +233,29 @@ export default function RedPacketClaimPage() {
     return `${days > 0 ? `${days}d ` : ''}${hours.toString().padStart(2, '0')}h : ${minutes.toString().padStart(2, '0')}m : ${seconds.toString().padStart(2, '0')}s`;
   };
 
-  const rawSender = packetData?.[1] || "";
-  const remainingAmount = Number(packetData?.[4] || 0);
-  const totalClaimers = Number(packetData?.[5] || 0);
-  const remainingClaimers = Number(packetData?.[6] || 0);
-  const isCancelled = packetData?.[10] || false;
-  const rawMessage = packetData?.[11] || "";
+  const rawSender = String(packetData?.[1] ?? "");
+  const remainingAmount = Number(packetData?.[4] ?? 0);
+  const totalClaimers = Number(packetData?.[5] ?? 0);
+  const remainingClaimers = Number(packetData?.[6] ?? 0);
+  const isCancelled = Boolean(packetData?.[10]);
+  const rawMessage = String(packetData?.[11] ?? "");
 
   const claimedCount = totalClaimers - remainingClaimers;
   const isEnded = (remainingClaimers === 0 && totalClaimers > 0) || (remainingAmount === 0 && packetData) || isCancelled;
-  
-  const parsedMsg = parseGiftMessage(rawMessage);
-  const displaySender = packetData?.[9] || parsedMsg.isAnonymous ? "Secret Sender" : shortenAddress(rawSender);
+
+  // Decrypt message when packet data or sender changes
+  useEffect(() => {
+    if (!rawMessage || !rawSender) {
+      setParsedMsg(parseGiftMessageLegacy(rawMessage));
+      return;
+    }
+    // Red packets are encrypted with creator's address
+    decryptMessage(rawMessage, rawSender)
+      .then(setParsedMsg)
+      .catch(() => setParsedMsg(parseGiftMessageLegacy(rawMessage)));
+  }, [rawMessage, rawSender]);
+
+  const displaySender = Boolean(packetData?.[9]) || parsedMsg.isAnonymous ? "Secret Sender" : shortenAddress(rawSender);
 
   return (
     <div className="min-h-screen bg-background font-sans text-foreground flex flex-col relative overflow-hidden">

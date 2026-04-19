@@ -18,6 +18,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import contractAbi from "@/contractAbi.json";
 import { appendBuilderCode } from "@/lib/builderCode";
+import { encryptMessage } from "@/lib/messageCrypto";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 
@@ -117,14 +118,19 @@ function useEvmWallet() {
 
   useEffect(() => {
     if (localStorage.getItem(STORAGE_KEY) === "true") checkConnection();
-    if (window.ethereum) {
-      const eth: any = window.ethereum;
-      eth.on("accountsChanged", (accs: string[]) => {
-        if (accs.length === 0) confirmDisconnect();
-        else checkConnection();
-      });
-      eth.on("chainChanged", () => setTimeout(checkConnection, 1000));
-    }
+    if (!window.ethereum) return;
+    const eth: any = window.ethereum;
+    const onAccountsChanged = (accs: string[]) => {
+      if (accs.length === 0) confirmDisconnect();
+      else checkConnection();
+    };
+    const onChainChanged = () => setTimeout(checkConnection, 1000);
+    eth.on("accountsChanged", onAccountsChanged);
+    eth.on("chainChanged", onChainChanged);
+    return () => {
+      eth.removeListener("accountsChanged", onAccountsChanged);
+      eth.removeListener("chainChanged", onChainChanged);
+    };
   }, [checkConnection, confirmDisconnect]);
 
   return {
@@ -174,7 +180,16 @@ export default function CreatePage() {
   const [isResolving, setIsResolving] = useState(false);
   const [resolutionError, setResolutionError] = useState<string>("");
   const [showGiftModal, setShowGiftModal] = useState(false);
-  const [successData, setSuccessData] = useState<any>(null);
+  const [successData, setSuccessData] = useState<{
+    token: string;
+    amount: string;
+    recipient: string;
+    unlockDate: Date;
+    message: string;
+    txHash: string;
+    nftTokenId: string;
+    isAnonymous: boolean;
+  } | null>(null);
   const [maxClaimers, setMaxClaimers] = useState("10");
   const [distributionType, setDistributionType] = useState<"EQUAL" | "LUCKY">("EQUAL");
   const [showLinkModal, setShowLinkModal] = useState(false);
@@ -322,8 +337,8 @@ export default function CreatePage() {
             method: "wallet_switchEthereumChain",
             params: [{ chainId: CHAIN_ID_HEX }],
           });
-        } catch (switchError: any) {
-          if (switchError.code === 4902) {
+        } catch (switchError: unknown) {
+          if ((switchError as { code?: number })?.code === 4902) {
             await window.ethereum.request({
               method: "wallet_addEthereumChain",
               params: [
@@ -487,7 +502,9 @@ export default function CreatePage() {
       );
       const unlockTimeBigInt = BigInt(unlockTimestamp);
       const metadata = { content: message || "", isAnonymous };
-      const obfuscatedMessage = btoa(JSON.stringify(metadata));
+      // Encrypt message: for single gifts use recipient; for red packets use sender
+      const encryptionRecipient = isRedPacket ? address : resolvedAddress;
+      const obfuscatedMessage = await encryptMessage(metadata, encryptionRecipient);
 
       if (selectedToken === "USDC" && usdcAllowance < amountWei) {
         setLoadingStep("APPROVING");
@@ -533,8 +550,11 @@ export default function CreatePage() {
 
         const rpReceipt = await tx.wait();
         let newPacketId = "";
-        if (rpReceipt) {
-          const allLogs = Array.from(rpReceipt.logs) as Array<any>;
+
+        // Parse packet ID from receipt logs
+        const extractPacketId = (receipt: typeof rpReceipt): string => {
+          if (!receipt) return "";
+          const allLogs = Array.from(receipt.logs) as Array<any>;
           for (const log of allLogs) {
             try {
               const parsedLog = (giftContract.interface as any).parseLog({
@@ -543,14 +563,31 @@ export default function CreatePage() {
               });
               const logName: string = String((parsedLog as any)?.name ?? "");
               if (logName.indexOf("Created") !== -1) {
-                newPacketId = (parsedLog as any).args[0].toString();
-                break;
+                return (parsedLog as any).args[0].toString();
               }
             } catch {}
           }
+          return "";
+        };
+
+        newPacketId = extractPacketId(rpReceipt);
+
+        // Retry: re-fetch receipt if event parsing failed on first pass
+        if (!newPacketId && tx.hash) {
+          try {
+            await new Promise((r) => setTimeout(r, 3000));
+            const retryReceipt = await activeProvider.getTransactionReceipt(tx.hash);
+            newPacketId = extractPacketId(retryReceipt);
+          } catch {}
         }
-        const finalId: string = newPacketId ? newPacketId : tx.hash.substring(0, 10);
-        setGeneratedLink(`${window.location.origin}/packet/${finalId}`);
+
+        if (!newPacketId) {
+          setErrors({ submit: "Red packet created but could not determine packet ID. Check your wallet history on Basescan." });
+          setLoadingStep("IDLE");
+          return;
+        }
+
+        setGeneratedLink(`${window.location.origin}/packet/${newPacketId}`);
         setShowLinkModal(true);
       } else {
         const assetType = selectedToken === "ETH" ? 0 : 1;
@@ -1007,7 +1044,7 @@ export default function CreatePage() {
         isOpen={showGiftModal}
         onClose={handleResetForm}
         type="success"
-        gift={successData || {}}
+        gift={successData ?? undefined}
         onSendAnother={handleResetForm}
       />
 
@@ -1040,11 +1077,23 @@ export default function CreatePage() {
                 </button>
               </div>
               <div className="grid grid-cols-1 gap-3">
-                <Button className="rounded-xl font-bold bg-white text-black hover:bg-gray-100 h-12 border-none">
+                <Button
+                  onClick={() => {
+                    const text = encodeURIComponent(`I just created a Red Packet on Base! Claim yours here: ${generatedLink}`);
+                    window.open(`https://x.com/intent/tweet?text=${text}`, "_blank", "noopener");
+                  }}
+                  className="rounded-xl font-bold bg-white text-black hover:bg-gray-100 h-12 border-none"
+                >
                   Share on X (Twitter)
                 </Button>
-                <Button className="rounded-xl font-bold bg-black !text-[#0052FF] hover:bg-blue-50 h-12 border-none">
-                  Post on Base App
+                <Button
+                  onClick={() => {
+                    const text = encodeURIComponent(`I just created a Red Packet on Base! Claim yours here: ${generatedLink}`);
+                    window.open(`https://warpcast.com/~/compose?text=${text}`, "_blank", "noopener");
+                  }}
+                  className="rounded-xl font-bold bg-black !text-[#0052FF] hover:bg-blue-50 h-12 border-none"
+                >
+                  Share on Warpcast
                 </Button>
                 <Button
                   onClick={handleResetForm}
@@ -1068,7 +1117,7 @@ export default function CreatePage() {
   );
 }
 
-function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
+function DisconnectModal({ isOpen, onClose, onConfirm }: { isOpen: boolean; onClose: () => void; onConfirm: () => void }) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">

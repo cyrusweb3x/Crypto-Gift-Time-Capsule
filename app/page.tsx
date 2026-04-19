@@ -75,12 +75,15 @@ export default function HomePage() {
 
   useEffect(() => {
     if (localStorage.getItem("yupp_wallet_connected") === "true") checkConnection();
-    if (window.ethereum) {
-      window.ethereum.on("accountsChanged", (accs: string[]) => {
-        if (accs.length > 0) { setAddress(accs[0]); setIsConnected(true); }
-        else { confirmDisconnect(); }
-      });
-    }
+    if (!window.ethereum) return;
+    const onAccountsChanged = (accs: string[]) => {
+      if (accs.length > 0) { setAddress(accs[0]); setIsConnected(true); }
+      else { confirmDisconnect(); }
+    };
+    window.ethereum.on("accountsChanged", onAccountsChanged);
+    return () => {
+      window.ethereum?.removeListener("accountsChanged", onAccountsChanged);
+    };
   }, [checkConnection, confirmDisconnect]);
 
   const fetchGiftCount = useCallback(async () => {
@@ -211,7 +214,7 @@ export default function HomePage() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
+function DisconnectModal({ isOpen, onClose, onConfirm }: { isOpen: boolean; onClose: () => void; onConfirm: () => void }) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
@@ -244,7 +247,7 @@ function DisconnectModal({ isOpen, onClose, onConfirm }: any) {
   );
 }
 
-function FeatureCard({ icon, title, description, delay }: any) {
+function FeatureCard({ icon, title, description, delay }: { icon: React.ReactNode; title: string; description: string; delay: number }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
